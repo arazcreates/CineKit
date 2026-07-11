@@ -1,0 +1,63 @@
+{
+  "setups": {
+    "three_point": {
+      "name": "Three-Point",
+      "description": "Classic key / fill / rim interview setup.",
+      "lights": [
+        { "role": "KEY", "type": "AREA", "azimuth": 40, "elevation": 35, "distance": 3.0, "size": 1.2, "power": 250, "color": [1.0, 0.97, 0.92] },
+        { "role": "FILL", "type": "AREA", "azimuth": -50, "elevation": 15, "distance": 3.5, "size": 2.0, "power": 80, "color": [0.95, 0.97, 1.0] },
+        { "role": "RIM", "type": "SPOT", "azimuth": 160, "elevation": 45, "distance": 3.0, "size": 0.5, "power": 180, "color": [1.0, 1.0, 1.0] }
+      ]
+    },
+    "butterfly": {
+      "name": "Butterfly / Paramount",
+      "description": "Key directly above-front of the face; glamour symmetry, butterfly nose shadow.",
+      "lights": [
+        { "role": "KEY", "type": "AREA", "azimuth": 0, "elevation": 55, "distance": 2.5, "size": 1.5, "power": 300, "color": [1.0, 0.98, 0.95] },
+        { "role": "FILL", "type": "AREA", "azimuth": 0, "elevation": -30, "distance": 2.5, "size": 2.0, "power": 60, "color": [1.0, 1.0, 1.0] }
+      ]
+    },
+    "rembrandt": {
+      "name": "Rembrandt",
+      "description": "Key 45/45 leaving the signature cheek triangle; soft low fill.",
+      "lights": [
+        { "role": "KEY", "type": "AREA", "azimuth": 45, "elevation": 45, "distance": 2.8, "size": 1.0, "power": 280, "color": [1.0, 0.96, 0.9] },
+        { "role": "FILL", "type": "AREA", "azimuth": -60, "elevation": 10, "distance": 4.0, "size": 2.5, "power": 40, "color": [0.92, 0.95, 1.0] }
+      ]
+    },
+    "split": {
+      "name": "Split",
+      "description": "Hard side key splitting the face in two; dramatic, no fill by default.",
+      "lights": [
+        { "role": "KEY", "type": "SPOT", "azimuth": 90, "elevation": 10, "distance": 3.0, "size": 0.4, "power": 350, "color": [1.0, 0.98, 0.95] }
+      ]
+    },
+    "rim_fill": {
+      "name": "Rim + Fill",
+      "description": "Silhouette-leaning: strong rim, whisper of fill from the front.",
+      "lights": [
+        { "role": "RIM", "type": "SPOT", "azimuth": 170, "elevation": 40, "distance": 3.0, "size": 0.5, "power": 400, "color": [1.0, 1.0, 1.0] },
+        { "role": "RIM", "type": "SPOT", "azimuth": -170, "elevation": 40, "distance": 3.0, "size": 0.5, "power": 300, "color": [0.9, 0.95, 1.0] },
+        { "role": "FILL", "type": "AREA", "azimuth": 0, "elevation": 15, "distance": 4.0, "size": 2.5, "power": 40, "color": [1.0, 1.0, 1.0] }
+      ]
+    },
+    "product_tabletop": {
+      "name": "Product Tabletop",
+      "description": "Big soft top light, two edge kickers, bounce fill for tabletop product work.",
+      "lights": [
+        { "role": "KEY", "type": "AREA", "azimuth": 0, "elevation": 80, "distance": 2.0, "size": 3.0, "power": 200, "color": [1.0, 1.0, 1.0] },
+        { "role": "RIM", "type": "AREA", "azimuth": 120, "elevation": 20, "distance": 2.5, "size": 0.6, "power": 120, "color": [1.0, 1.0, 1.0] },
+        { "role": "RIM", "type": "AREA", "azimuth": -120, "elevation": 20, "distance": 2.5, "size": 0.6, "power": 120, "color": [1.0, 1.0, 1.0] },
+        { "role": "FILL", "type": "AREA", "azimuth": 0, "elevation": 5, "distance": 3.0, "size": 2.0, "power": 50, "color": [1.0, 1.0, 1.0] }
+      ]
+    },
+    "window_daylight": {
+      "name": "Window Daylight",
+      "description": "One big cool soft source high to the side, like north light through a window; warm low bounce.",
+      "lights": [
+        { "role": "KEY", "type": "AREA", "azimuth": 70, "elevation": 30, "distance": 3.5, "size": 3.5, "power": 400, "color": [0.85, 0.92, 1.0] },
+        { "role": "FILL", "type": "AREA", "azimuth": -40, "elevation": -10, "distance": 3.0, "size": 2.0, "power": 30, "color": [1.0, 0.9, 0.8] }
+      ]
+    }
+  }
+}

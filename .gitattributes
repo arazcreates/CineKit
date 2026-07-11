@@ -1,0 +1,11 @@
+# Normalize line endings: store all text as LF in the repo and check it out
+# as LF everywhere. Keeps a Python project consistent across Windows/macOS/
+# Linux and avoids "whole file changed" diffs from CRLF/LF churn.
+* text=auto eol=lf
+
+# Binary assets — Git must never apply line-ending or text filters to these.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.blend binary
+*.zip  binary

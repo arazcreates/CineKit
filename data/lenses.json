@@ -1,0 +1,20 @@
+{
+  "lenses": [
+    { "id": "prime_14", "name": "14mm f/2.8 Ultra Wide", "focal": 14, "max_aperture": 2.8, "breathing": 0.05 },
+    { "id": "prime_18", "name": "18mm f/2.8", "focal": 18, "max_aperture": 2.8, "breathing": 0.05 },
+    { "id": "prime_24", "name": "24mm f/1.4", "focal": 24, "max_aperture": 1.4, "breathing": 0.1 },
+    { "id": "prime_28", "name": "28mm f/2", "focal": 28, "max_aperture": 2.0, "breathing": 0.1 },
+    { "id": "prime_35", "name": "35mm f/1.4", "focal": 35, "max_aperture": 1.4, "breathing": 0.15 },
+    { "id": "prime_50", "name": "50mm f/1.2", "focal": 50, "max_aperture": 1.2, "breathing": 0.2 },
+    { "id": "prime_58_vintage", "name": "58mm f/2 Vintage (Helios)", "focal": 58, "max_aperture": 2.0, "breathing": 0.45 },
+    { "id": "prime_85", "name": "85mm f/1.4 Portrait", "focal": 85, "max_aperture": 1.4, "breathing": 0.25 },
+    { "id": "prime_105_macro", "name": "105mm f/2.8 Macro", "focal": 105, "max_aperture": 2.8, "breathing": 0.6 },
+    { "id": "prime_135", "name": "135mm f/2", "focal": 135, "max_aperture": 2.0, "breathing": 0.2 },
+    { "id": "prime_200", "name": "200mm f/2.8", "focal": 200, "max_aperture": 2.8, "breathing": 0.15 },
+    { "id": "zoom_16_35", "name": "16-35mm f/2.8 Zoom (24)", "focal": 24, "max_aperture": 2.8, "breathing": 0.2 },
+    { "id": "zoom_24_70", "name": "24-70mm f/2.8 Zoom (50)", "focal": 50, "max_aperture": 2.8, "breathing": 0.3 },
+    { "id": "zoom_70_200", "name": "70-200mm f/2.8 Zoom (135)", "focal": 135, "max_aperture": 2.8, "breathing": 0.35 },
+    { "id": "cine_32", "name": "32mm T1.5 Cine Prime", "focal": 32, "max_aperture": 1.5, "breathing": 0.02 },
+    { "id": "cine_75", "name": "75mm T1.5 Cine Prime", "focal": 75, "max_aperture": 1.5, "breathing": 0.02 }
+  ]
+}

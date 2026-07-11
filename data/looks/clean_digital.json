@@ -1,0 +1,11 @@
+{
+  "id": "clean_digital",
+  "name": "Clean Digital",
+  "description": "Neutral baseline: physical camera only, plus imperceptible grain to unify a project.",
+  "rationale": "The 'off' look that still goes through the same pipeline, so cutting between looked and clean shots keeps a consistent texture floor. A whisper of fine grain (dither) prevents banding in gradients and matches the noise floor of the artifact looks. No color or camera overrides — your view transform and sensor are respected.",
+  "camera": {},
+  "color": {},
+  "chain": [
+    { "type": "grain", "size": 1.0, "amount": 0.02, "strength": 1.0 }
+  ]
+}

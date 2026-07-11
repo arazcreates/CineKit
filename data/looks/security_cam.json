@@ -1,0 +1,16 @@
+{
+  "id": "security_cam",
+  "name": "Security Cam",
+  "description": "CCTV: desaturated, harsh gamma, interlace combing, timestamp, deep focus.",
+  "rationale": "Surveillance sensors run wide-open gain curves for visibility, not beauty: harsh gamma (~1.6 display-referred) and near-monochrome output. Interlaced field capture leaves alternating-line artifacts on motion — a scanline pattern whose phase flips every frame. Small sensors and wide lenses give deep focus (forced min f-stop). The burned-in timestamp is generated as an image datablock, composited top-left. Low frame-rate feel: do NOT change scene FPS — render normally and either step time in the Sequencer (Speed Control strip, 'Frame Number' mode) or keyframe-hold your action every 3-4 frames; see README.",
+  "camera": { "aspect": "4:3", "min_fstop": 8.0 },
+  "color": { "view_transform": "Standard" },
+  "chain": [
+    { "type": "desaturate", "amount": 0.85, "strength": 1.0 },
+    { "type": "gamma", "value": 1.6, "strength": 1.0 },
+    { "type": "soft_res", "lines": 480, "strength": 1.0 },
+    { "type": "luma_noise", "amount": 0.08, "strength": 1.0 },
+    { "type": "interlace", "amount": 0.25, "strength": 1.0 },
+    { "type": "timestamp", "strength": 1.0 }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "digicam_2005",
+  "name": "Digicam 2005",
+  "description": "Mid-2000s compact digital camera: tiny sensor, deep focus, crunchy sharpening, JPEG blocking.",
+  "rationale": "A 1/2.5\" sensor (5.76 mm wide) at f/2.8 behaves like f/16+ on full frame — deep DOF comes from the real sensor crop and a forced minimum f-stop on the CAMERA, never from fake blur. In-camera processing oversharpened aggressively (halo radius ~2 px at 5 MP). CCD shadow noise is chroma-dominant (blotchy color, not luma grain). Highlights clip hard in sensor RGB before white balance, leaving a magenta/pink cast in blown skies. 4:1:1-ish JPEG chroma subsampling plus 8x8 DCT gives faint blocking. High-contrast edges show purple fringing from axial chromatic aberration and sensor blooming.",
+  "camera": { "sensor_width": 5.76, "aspect": "4:3", "min_fstop": 8.0 },
+  "color": { "view_transform": "Standard", "exposure_bias": 0.3 },
+  "chain": [
+    { "type": "sharpen", "radius_px": 2.0, "amount": 2.2, "strength": 1.0 },
+    { "type": "shadow_noise", "amount": 0.18, "strength": 1.0 },
+    { "type": "highlight_bloom", "threshold": 0.9, "magenta": 0.25, "strength": 1.0 },
+    { "type": "blocking", "block_px": 8, "strength": 0.5 },
+    { "type": "fringing", "width_px": 2.0, "strength": 0.7 }
+  ]
+}

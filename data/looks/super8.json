@@ -1,0 +1,16 @@
+{
+  "id": "super8",
+  "name": "Super 8",
+  "description": "Home-movie Super 8: heavy grain and weave, vignette, warm cast, dust specks, 4:3.",
+  "rationale": "Super 8 gate is 5.79 mm wide — huge relative grain (the same dye clouds on a quarter of 16mm's area), so grain size/amount are roughly double 16mm's. Cheap zoom optics vignette visibly. Kodachrome/Ektachrome home stock plus tungsten shooting reads warm. Projection dust and emulsion scratches appear as sparse bright/dark specks that live for a single frame — sparse thresholded animated noise. Registration in cartridge cameras was poor: strong gate weave.",
+  "camera": { "sensor_width": 5.79, "aspect": "4:3", "breathing_scale": 2.0 },
+  "color": {},
+  "chain": [
+    { "type": "grain", "size": 3.5, "amount": 0.22, "strength": 1.0 },
+    { "type": "weave", "pixels": 4.0, "strength": 1.0 },
+    { "type": "vignette", "amount": 0.55, "strength": 1.0 },
+    { "type": "color_cast", "r": 1.08, "g": 1.0, "b": 0.88, "strength": 1.0 },
+    { "type": "dust", "density": 0.06, "strength": 1.0 },
+    { "type": "film_curve", "contrast": 0.22, "warmth": 0.1, "strength": 1.0 }
+  ]
+}

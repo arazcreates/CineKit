@@ -1,0 +1,14 @@
+{
+  "id": "16mm",
+  "name": "16mm",
+  "description": "Super 16 negative: organic grain, gate weave, halation, Kodak-ish tone curve, 1.66:1.",
+  "rationale": "Super 16 gate is 12.52 mm wide — the sensor is set to match so lens FOV and DOF behave like the real format. Grain is a physical dye-cloud structure: size-varying, strongest in the blue-sensitive layer, so each channel gets its own animated noise at slightly different scale. The film is never perfectly registered in the gate: sub-pixel gate weave via animated translate. Bright sources scatter through the emulsion and reflect off the base, exposing the red-sensitive layer around highlights — halation as a threshold + red-orange glow. Tone curve approximates Kodak Vision3 print contrast with a gentle shoulder.",
+  "camera": { "sensor_width": 12.52, "aspect": "1.66:1", "breathing_scale": 1.5 },
+  "color": {},
+  "chain": [
+    { "type": "halation", "threshold": 0.85, "size": 7, "strength": 1.0 },
+    { "type": "grain", "size": 2.0, "amount": 0.12, "strength": 1.0 },
+    { "type": "weave", "pixels": 1.5, "strength": 1.0 },
+    { "type": "film_curve", "contrast": 0.18, "warmth": 0.06, "strength": 1.0 }
+  ]
+}

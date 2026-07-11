@@ -1,0 +1,27 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---- Build output ----
+# The packaged extension .zip is a build artifact — rebuild it with
+# `blender --command extension build`, don't commit it.
+/dist/
+*.zip
+
+# ---- Blender ----
+*.blend1
+*.blend2
+*.blend3
+
+# ---- OS / editor noise ----
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
+
+# ---- Personal notes (kept on disk for your reference, never uploaded) ----
+GITHUB_SETUP.md
