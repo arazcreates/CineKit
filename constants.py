@@ -10,6 +10,8 @@ TAG_RIG_MEMBER = "cinekit_rig_member"  # on rig members: rig root name
 TAG_LOOK = "cinekit_look"          # on look node groups: look id
 TAG_LIGHT_SETUP = "cinekit_light_setup"  # on setup collections: setup id
 TAG_FOCUS = "cinekit_focus"        # on focus target empties
+TAG_POINT = "cinekit_point_role"      # on editable rig points: role label
+TAG_POINT_MOVE = "cinekit_point_move"  # on rig points whose location is free
 
 # Keys for stored prior state (JSON strings in ID custom properties).
 PREV_CAMERA_RIG = "cinekit_prerig"        # camera object: matrix + parent before rigging

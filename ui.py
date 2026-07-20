@@ -152,15 +152,45 @@ class VIEW3D_PT_ck_shots(_ChildPanel, bpy.types.Panel):
         layout.operator("cinekit.batch_render", icon='RENDER_ANIMATION')
 
 
+def _draw_rig_points(layout, context, root, rig_type):
+    """Advanced Mode: list a rig's editable points (select + move), plus the
+    dolly path-source operators."""
+    pbox = layout.box()
+    pbox.label(text="Rig Points", icon='EMPTY_DATA')
+    if rig_type == K.RIG_DOLLY:
+        row = pbox.row(align=True)
+        row.operator("cinekit.rig_path_from_gp", text="From Grease Pencil",
+                     icon='OUTLINER_OB_GREASEPENCIL')
+        row.operator("cinekit.rig_path_from_curve", text="From Curve",
+                     icon='OUTLINER_OB_CURVE')
+    for role, obj, movable in rig.rig_points(root):
+        prow = pbox.row(align=True)
+        prow.label(text=role)
+        op = prow.operator("cinekit.rig_select_point", text="Select",
+                           icon='RESTRICT_SELECT_OFF')
+        op.object_name = obj.name
+        if movable:
+            pbox.prop(obj, "location", text="")
+    pbox.label(text="Select a point, then G to move it in the viewport",
+               icon='INFO')
+
+
 class VIEW3D_PT_ck_rigs(_ChildPanel, bpy.types.Panel):
     bl_label = "Rigs"
 
     def draw(self, context):
         layout = self.layout
-        cam = context.scene.camera
+        scene = context.scene
+        ck = scene.cinekit
+        cam = scene.camera
         root = rig.rig_root_of(cam) if cam else None
 
+        layout.prop(ck, "rig_advanced_mode", icon='TOOL_SETTINGS')
+
         if root is None:
+            if ck.rig_advanced_mode:
+                layout.label(text="Advanced: each rig opens a setup dialog",
+                             icon='INFO')
             col = layout.column(align=True)
             col.operator("cinekit.rig_dolly", icon='TRACKING')
             col.operator("cinekit.rig_crane", icon='CON_TRACKTO')
@@ -201,6 +231,8 @@ class VIEW3D_PT_ck_rigs(_ChildPanel, bpy.types.Panel):
             box.prop(root, '["ck_speed"]', text="Speed °/s", slider=True)
             box.prop(root, '["ck_offset"]', text="Start Angle", slider=True)
             box.operator("cinekit.orbit_one_revolution", icon='FILE_REFRESH')
+        if ck.rig_advanced_mode:
+            _draw_rig_points(box, context, root, rig_type)
         box.operator("cinekit.rig_remove", icon='X')
 
 

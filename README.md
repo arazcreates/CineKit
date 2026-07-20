@@ -4,18 +4,18 @@
 > camera rigs, focus tools, lighting presets & gobos, and signature
 > camera **Looks** (VHS, 16mm, Digicam…) built from real optics.
 
-**Author:** Araz Creates · **License:** GPL-3.0-or-later · **Blender:** 4.2+ (incl. 5.x) · **Engines:** Cycles & EEVEE Next
+**Author:** Araz Creates · **License:** GPL-3.0-or-later · **Blender:** 5.2 LTS+ · **Engines:** Cycles & EEVEE
 
-A cinematography, lighting and camera-look toolkit for **Blender 4.2+,
-including Blender 5.x** (Extensions platform, `blender_manifest.toml`).
-Pure Python, no external dependencies. GPL-3.0-or-later; shipped gobo
-textures are CC0-1.0.
+A cinematography, lighting and camera-look toolkit for **Blender 5.2 LTS**
+(Extensions platform, `blender_manifest.toml`). Pure Python, no external
+dependencies. GPL-3.0-or-later; shipped gobo textures are CC0-1.0.
 
 ## Blender version compatibility
 
-Verified on **Blender 5.1** (headless smoke test + installed-extension
-test). Blender 4.2-4.x is supported through compatibility fallbacks that
-are exercised automatically when the legacy APIs are present:
+Requires and is verified on **Blender 5.2 LTS** — both an automated smoke
+test and hands-on testing in the Blender 5.2 UI. The source is written
+portably across the Blender 4.2 → 5.x API break, so it also runs on the
+older 4.2–5.1 series; those compatibility helpers are kept in place:
 
 | Area | 4.2-4.x | 5.x |
 |---|---|---|
@@ -40,7 +40,7 @@ the **camera and compositor level**, not a LUT slapped on afterward.
 
 Zip the extension folder (or `blender --command extension build`) and
 install via *Preferences > Get Extensions > Install from Disk*, or drop the
-folder into your extensions repo. Requires Blender **4.2** or later.
+folder into your extensions repo. Requires Blender **5.2 LTS** or later.
 
 ## Engine support matrix
 
@@ -126,6 +126,15 @@ carry custom properties).
   Documentary, Run and gun, Crash zoom.
 - **Orbit/Turntable** — radius/height/speed/start-angle, plus a
   *One Revolution Over Frame Range* operator for product shots.
+
+**Advanced Mode** (toggle at the top of the Rigs panel). With it on,
+creating a rig first opens a customization dialog (its settings also stay
+live in the bottom-left *Adjust Last Operation* redo panel), and a **Rig
+Points** editor appears in the panel to select and move each rig's defining
+points — base, carrier, aim, path — directly in the viewport (Select, then
+press G). The dolly can take a **custom path**: build the track from a
+**Grease Pencil** stroke you drew, or from another selected **curve**
+object, instead of the generated straight track.
 
 Drivers use only Blender's built-in driver namespace (`frame`, math), so
 they keep evaluating even with the add-on disabled.

@@ -1,13 +1,13 @@
 schema_version = "1.0.0"
 
 id = "cinekit"
-version = "1.0.0"
+version = "1.1.0"
 name = "CineKit"
 tagline = "Physical cameras, shots, rigs, lighting and film looks"
 maintainer = "Araz Creates <araz.design3d@gmail.com>"
 type = "add-on"
 tags = ["Camera", "Lighting", "Render", "Compositing", "3D View"]
-blender_version_min = "4.2.0"
+blender_version_min = "5.2.0"
 license = ["SPDX:GPL-3.0-or-later"]
 copyright = ["2026 Araz Creates"]
 
@@ -15,6 +15,8 @@ copyright = ["2026 Araz Creates"]
 # and dedicated to the public domain (CC0-1.0).
 
 [build]
+# The built .zip ships only the installable add-on (code, data, LICENSE,
+# README, CHANGELOG); development and repo-only files are excluded.
 paths_exclude_pattern = [
   "__pycache__/",
   "/tests/",

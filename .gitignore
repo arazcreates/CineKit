@@ -23,5 +23,5 @@ desktop.ini
 *.swp
 *~
 
-# ---- Personal notes (kept on disk for your reference, never uploaded) ----
+# ---- Local-only (kept on disk, never uploaded) ----
 GITHUB_SETUP.md

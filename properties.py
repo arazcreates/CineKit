@@ -192,6 +192,12 @@ class CK_SceneSettings(bpy.types.PropertyGroup):
         name="Shot Overlay",
         description="Viewport text overlay: shot, camera, lens, f-stop, "
                     "frame-in-shot", default=False, update=_overlay_update)
+    rig_advanced_mode: BoolProperty(
+        name="Advanced Mode",
+        description="Show a customization dialog when creating a rig, and "
+                    "a Rig Points panel to select and move rig points "
+                    "(carrier, aim, path, base) directly in the viewport",
+        default=False)
     security_timestamp: StringProperty(
         name="Timestamp Text",
         description="Burned-in text for the Security Cam look "

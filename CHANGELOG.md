@@ -4,6 +4,29 @@ All notable changes to CineKit are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/); version numbers match the
 Blender extension version in `blender_manifest.toml`.
 
+## [1.1.0] — 2026-07-20
+
+Now targets **Blender 5.2 LTS** (minimum raised to 5.2.0). Verified on
+Blender 5.2 LTS with both the automated smoke test and hands-on testing in
+the Blender UI.
+
+### Added
+- **Rig Advanced Mode** — a toggle in the Rigs panel. With it on, creating
+  a rig opens a customization dialog (its settings are also editable in the
+  bottom-left "Adjust Last Operation" redo panel): dolly path length /
+  start position / aim distance / banking, crane base drop / boom / tilt,
+  handheld intensity, orbit speed.
+- **Rig Points editor** — select and move a rig's defining points (base,
+  carrier, aim, path) straight from the panel and the 3D viewport.
+- **Custom dolly path** — build the dolly track from a Grease Pencil stroke
+  you drew, or from another selected curve object, instead of the generated
+  straight track.
+
+### Changed
+- Minimum Blender version raised to **5.2.0** (Blender 5.2 LTS).
+
+[1.1.0]: https://github.com/arazcreates/CineKit/releases/tag/v1.1.0
+
 ## [1.0.0] — 2026-07-07
 
 First public release. Verified on Blender 5.1 (headless smoke test +
@@ -35,4 +58,4 @@ fallbacks.
 - Pure-Python test suite for optics and look-schema (41 tests) plus a
   headless Blender smoke test.
 
-[1.0.0]: https://github.com/ArazCreates/CineKit/releases/tag/v1.0.0
+[1.0.0]: https://github.com/arazcreates/CineKit/releases/tag/v1.0.0
