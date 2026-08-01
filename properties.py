@@ -67,8 +67,12 @@ def _camera_object_poll(self, obj):
 
 # ------------------------------------------------------------------- camera
 class CK_CameraSettings(bpy.types.PropertyGroup):
-    """Physical camera settings on Camera data. Engines: Cycles + EEVEE Next
-    (exposure/DOF/WB are engine-agnostic; motion blur uses render settings)."""
+    """Physical camera settings on Camera data.
+
+    Cycles and EEVEE both support this. Exposure, depth of field and
+    white balance work in both engines. Motion blur uses the render
+    settings.
+    """
 
     enabled: BoolProperty(
         name="Physical Camera",
@@ -127,7 +131,7 @@ class CK_CameraSettings(bpy.types.PropertyGroup):
                     "focal length", default=False, update=_breathing_update)
     breathing_amount: FloatProperty(
         name="Breathing Amount",
-        description="Breathing strength; prefilled from the lens preset",
+        description="Breathing strength. The lens preset sets this value",
         default=0.1, min=0.0, max=1.0, update=_breathing_update)
     look: StringProperty(
         name="Camera Look",

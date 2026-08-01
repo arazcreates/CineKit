@@ -30,7 +30,8 @@ def coc_mm(sensor_width_mm, sensor_height_mm):
 
 
 def hyperfocal_mm(focal_mm, fstop, coc):
-    """Hyperfocal distance: focus here and everything from H/2 to inf is sharp."""
+    """Hyperfocal distance. Focus here to make everything sharp from
+    H/2 to infinity."""
     if focal_mm <= 0 or fstop <= 0 or coc <= 0:
         raise ValueError("focal, f-stop and CoC must be positive")
     return focal_mm * focal_mm / (fstop * coc) + focal_mm
@@ -39,7 +40,8 @@ def hyperfocal_mm(focal_mm, fstop, coc):
 def dof_limits_mm(focal_mm, fstop, focus_mm, coc):
     """(near, far) sharp limits. far is math.inf at/beyond hyperfocal.
 
-    Standard thin-lens DoF equations; focus distance measured from the lens.
+    These are standard thin-lens DoF equations. Measure the focus
+    distance from the lens.
     """
     if focus_mm <= focal_mm:
         # Focused inside the lens' own focal length: no real image.
@@ -53,7 +55,8 @@ def dof_limits_mm(focal_mm, fstop, focus_mm, coc):
 
 
 def dof_total_mm(focal_mm, fstop, focus_mm, coc):
-    """Total depth of field; math.inf when far limit is infinite."""
+    """Total depth of field. Returns math.inf if the far limit is
+    infinite."""
     near, far = dof_limits_mm(focal_mm, fstop, focus_mm, coc)
     return far - near
 
@@ -88,7 +91,10 @@ def ev100(fstop, time_s, iso):
 
 
 def scene_exposure_for_ev100(ev, compensation=0.0):
-    """view_settings.exposure that renders a scene metered at `ev` to mid grey."""
+    """Return the view_settings.exposure value for middle grey.
+
+    The scene meters at `ev`.
+    """
     return EXPOSURE_CALIBRATION - ev + compensation
 
 

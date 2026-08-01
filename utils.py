@@ -13,7 +13,7 @@ from . import constants as K
 
 
 class CKError(Exception):
-    """Raised by the apply layer; operators catch it and self.report()."""
+    """Raised by the apply layer. Operators catch it and report it."""
 
 
 # ---------------------------------------------------------------- suppression
@@ -48,13 +48,15 @@ def is_linked(id_block):
 
 def require_editable(id_block, what="data"):
     if is_linked(id_block):
-        raise CKError(f"{what} '{id_block.name}' is linked from a library — "
-                      "make it local (Object > Relations > Make Local) first")
+        raise CKError(f"{what} '{id_block.name}' comes from a linked "
+                      "library. Make it local first. Use Object > "
+                      "Relations > Make Local.")
 
 
 # ---------------------------------------------------------------- collections
 def ck_collection(scene):
-    """The scene's 'CineKit' collection; created (and tagged) on demand."""
+    """Return the scene CineKit collection. Create and tag it if
+    needed."""
     for child in scene.collection.children:
         if child.get(K.TAG):
             return child
@@ -142,8 +144,9 @@ def add_driver(id_block, path, expression, variables=(), index=-1):
     drv.expression = expression
     if not drv.is_valid:
         id_block.driver_remove(path, index)
-        raise CKError(f"Driver on '{path}' failed to validate (possible "
-                      "dependency cycle) — refused, nothing was changed")
+        raise CKError(f"The driver on '{path}' is not valid. A "
+                      "dependency cycle is the usual cause. CineKit "
+                      "changed nothing.")
     return fcu
 
 
@@ -156,8 +159,8 @@ def remove_driver(id_block, path, index=-1):
 
 
 # -------------------------------------------------------------- actions
-# Blender 5 removed the legacy Action.fcurves API in favour of slotted
-# (layered) actions; these helpers work across both.
+# Blender 5 removed the legacy Action.fcurves API. It uses slotted
+# (layered) actions. These helpers work with both APIs.
 def action_fcurve_factory(action, id_holder):
     """Callable(data_path, index) -> new FCurve on `action`."""
     if hasattr(action, "fcurves"):  # 4.x legacy API

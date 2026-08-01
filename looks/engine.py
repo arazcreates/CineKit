@@ -17,16 +17,17 @@ happens on look-type change.
 
 Blender version compatibility
 -----------------------------
-4.2-4.x: scene.node_tree + Composite node; legacy compositor nodes
-(CompositorNodeMixRGB/Math/Texture...).
-5.x: scene.compositing_node_group + Group Output node; unified nodes
-(ShaderNodeMix/Math/TexNoise...), node settings as input sockets.
+Blender 4.2-4.x uses scene.node_tree with a Composite node. It has the
+legacy compositor nodes (CompositorNodeMixRGB, Math, Texture).
+Blender 5.x uses scene.compositing_node_group with a Group Output
+node. It has unified nodes (ShaderNodeMix, Math, TexNoise). Node
+settings became input sockets.
 Every node the builders create goes through small compat helpers that try
 the legacy type first and fall back to the 5.x equivalent.
 
-Compositor artifacts run identically on Cycles and EEVEE. Viewport preview
-of the compositor layer requires the Viewport Compositor; camera-layer
-parts (sensor crop, deep DOF) are visible in any viewport.
+Compositor artifacts give the same result in Cycles and in EEVEE. The
+Viewport Compositor shows the compositor layer in the viewport. The
+camera layer (sensor crop, deep DOF) shows in every viewport.
 """
 
 import bpy
@@ -97,8 +98,8 @@ def _new_mix(tree, blend='MIX', clamp=False):
 
 # ------------------------------------------------------ 4.x / 5.x compat
 # Blender 5.0 moved scene compositing to a node-group datablock
-# (scene.compositing_node_group) terminated by a Group Output node;
-# 4.x uses the embedded scene.node_tree terminated by a Composite node.
+# (scene.compositing_node_group). A Group Output node ends the tree.
+# Blender 4.x uses scene.node_tree with a Composite node at the end.
 def _has_group_compositor(scene):
     return hasattr(scene, "compositing_node_group")
 
@@ -113,7 +114,8 @@ def _get_comp_tree(scene):
 
 
 def _ensure_comp_tree(scene, prev):
-    """Get-or-create the scene compositor tree; records creation in prev."""
+    """Return the scene compositor tree, or create it. Record this in
+    prev."""
     if _has_group_compositor(scene):
         tree = scene.compositing_node_group
         if tree is None:
@@ -338,8 +340,11 @@ def set_white_balance(scene, gains):
 
 # ============================================================== look apply
 def apply_look(scene, look_id):
-    """Apply a look to the scene: compositor + camera + color layers.
-    Idempotent; fast in-place update when the look type is unchanged."""
+    """Apply a look to the scene: compositor, camera and color layers.
+
+    This is idempotent. It updates values in place when the look type
+    does not change.
+    """
     look = get_look(look_id)
     if look is None:
         raise CKError(f"Unknown look '{look_id}' — check the Looks panel "
@@ -389,7 +394,8 @@ def apply_look(scene, look_id):
 
 
 def remove_look(scene):
-    """Remove the active look; restore camera, color and compositor state."""
+    """Remove the active look. Restore the camera, color and compositor
+    state."""
     _restore_look_camera(scene)
     _restore_look_color(scene)
     node = _find_pipeline_node(scene)
@@ -468,8 +474,8 @@ def _apply_look_camera(scene, look):
         return
     cam = cam_obj.data
     if utils.is_linked(cam):
-        print(f"CineKit: camera '{cam.name}' is linked; look camera layer "
-              "skipped")
+        print(f"CineKit: camera '{cam.name}' comes from a linked "
+              "library. CineKit skipped the camera layer of the look.")
         return
     spec = look["camera"]
     ck = cam.cinekit
@@ -540,8 +546,10 @@ def _restore_look_camera(scene):
 
 # -------------------------------------------------------------- color layer
 def _apply_look_color(scene, look):
-    """Only touch the user's view transform when the look explicitly sets
-    one; store the previous transform for exact restore."""
+    """Change the view transform only when the look sets one.
+
+    Store the previous transform first, so Remove Look can restore it.
+    """
     spec = look["color"]
     vs = scene.view_settings
     if spec["view_transform"] or spec["look"]:
@@ -555,8 +563,8 @@ def _apply_look_color(scene, look):
                 vs.view_transform = spec["view_transform"]
             except TypeError:
                 print(f"CineKit: view transform "
-                      f"'{spec['view_transform']}' not available in this "
-                      "OCIO config; keeping current")
+                      f"'{spec['view_transform']}' is not in this OCIO "
+                      "config. CineKit kept the current transform.")
         if spec["look"]:
             try:
                 vs.look = spec["look"]
@@ -760,8 +768,8 @@ class _Builder:
 
     # -------------------------------------------------- animated textures
     # 4.x: legacy Texture node + bpy.data.textures (tagged, cleaned up).
-    # 5.x: unified texture nodes fed by Image Coordinates; animation drives
-    # the 4th noise dimension (W) with the built-in 'frame' variable.
+    # 5.x uses unified texture nodes fed by Image Coordinates. The
+    # animation drives the 4th noise dimension (W) with 'frame'.
     def _legacy_tex_node(self, kind, name_suffix, noise_size=0.25,
                          wood_bands=False):
         name = f"CK_{self.look['id']}_{name_suffix}"
@@ -825,7 +833,8 @@ class _Builder:
             return node.outputs[0]  # Factor
 
     def tex_bands(self, name_suffix, img, lines, flip_expression=None):
-        """Horizontal line pattern (interlace); phase can flip per frame."""
+        """Horizontal line pattern for interlace. The phase can flip per
+        frame."""
         try:
             node = self._legacy_tex_node('WOOD', name_suffix,
                                          wood_bands=True)

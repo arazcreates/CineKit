@@ -59,8 +59,8 @@ class CK_OT_auto_expose(bpy.types.Operator):
             count += 1
         l_avg = math.exp(log_sum / count)
         if l_avg <= 1e-6:
-            self.report({'ERROR'}, "Viewport is black — nothing to meter "
-                                   "(add lights or a world first)")
+            self.report({'ERROR'}, "The viewport is black. Add a light "
+                                   "or a world, then meter again.")
             return {'CANCELLED'}
 
         from . import preferences
@@ -80,8 +80,8 @@ class CK_OT_auto_expose(bpy.types.Operator):
         if abs(residual) > 0.02:
             ck.exposure_comp = min(max(ck.exposure_comp + residual, -5), 5)
             self.report({'WARNING'},
-                        f"ISO clamped to {iso_clamped}; {residual:+.1f} EV "
-                        "moved to exposure compensation")
+                        f"ISO limit reached at {iso_clamped}. CineKit moved "
+                        f"{residual:+.1f} EV to exposure compensation.")
         else:
             self.report({'INFO'},
                         f"Metered {l_avg:.4f} avg → ISO {iso_clamped}")
@@ -134,8 +134,8 @@ class _RigCreateBase(bpy.types.Operator):
         except CKError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-        self.report({'INFO'}, f"Rig '{root.name}' created — see Rig "
-                              "Settings in the CineKit panel")
+        self.report({'INFO'}, f"Rig '{root.name}' is ready. Open Rig "
+                              "Settings in the CineKit panel.")
         return {'FINISHED'}
 
 
@@ -197,9 +197,9 @@ class CK_OT_rig_dolly(_RigCreateBase):
                 self._find_source(context) is None:
             kind = ("Grease Pencil object"
                     if self.path_source == 'GREASE_PENCIL' else "curve")
-            self.report({'ERROR'}, f"Path From '{self.path_source}': select "
-                        f"a {kind} first (the scene camera stays the render "
-                        "camera)")
+            self.report({'ERROR'}, f"Path From uses '{self.path_source}'. "
+                        f"Select a {kind} first. The scene camera "
+                        "stays the render camera.")
             return {'CANCELLED'}
         return self._create(context, rig.create_dolly)
 
@@ -275,7 +275,8 @@ class CK_OT_rig_select_point(bpy.types.Operator):
     def execute(self, context):
         obj = bpy.data.objects.get(self.object_name)
         if obj is None:
-            self.report({'ERROR'}, "Rig point not found (was it deleted?)")
+            self.report({'ERROR'}, "The rig point no longer exists. Remove "
+                                   "the rig, then add it again.")
             return {'CANCELLED'}
         for other in list(context.selected_objects):
             other.select_set(False)
@@ -306,13 +307,14 @@ class CK_OT_rig_path_from_gp(_DollyActive, bpy.types.Operator):
             gp = next((o for o in context.selected_objects
                        if o.type == 'GREASEPENCIL'), None)
         if gp is None:
-            self.report({'ERROR'}, "Select the Grease Pencil object you "
-                        "drew the path with")
+            self.report({'ERROR'}, "Select the Grease Pencil object "
+                                   "that holds your drawn path.")
             return {'CANCELLED'}
         pts = rig.stroke_points_world(gp)
         if len(pts) < 2:
-            self.report({'ERROR'}, "That Grease Pencil has no usable stroke "
-                        "(draw a line of at least 2 points)")
+            self.report({'ERROR'}, "That Grease Pencil has no usable "
+                                   "stroke. Draw a line with 2 or "
+                                   "more points.")
             return {'CANCELLED'}
         try:
             rig.set_dolly_path(rig.rig_root_of(context.scene.camera), pts)
@@ -336,12 +338,13 @@ class CK_OT_rig_path_from_curve(_DollyActive, bpy.types.Operator):
                       if o.type == 'CURVE' and not o.get(K.TAG_RIG_MEMBER)),
                      None)
         if curve is None:
-            self.report({'ERROR'}, "Select a curve object to use as the "
-                        "dolly path")
+            self.report({'ERROR'}, "Select a curve object for the "
+                                   "dolly path.")
             return {'CANCELLED'}
         pts = rig.curve_points_world(curve)
         if len(pts) < 2:
-            self.report({'ERROR'}, "That curve has no usable points")
+            self.report({'ERROR'}, "That curve has no usable points. "
+                                   "Add points to the curve.")
             return {'CANCELLED'}
         try:
             rig.set_dolly_path(rig.rig_root_of(context.scene.camera), pts)

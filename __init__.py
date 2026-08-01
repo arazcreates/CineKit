@@ -2,9 +2,9 @@
 # Copyright (C) 2026 Araz Creates
 """CineKit — cinematography, lighting and camera-look toolkit.
 
-Blender 4.2+ extension (see blender_manifest.toml). Targets Cycles and
-EEVEE Next; engine-specific features degrade gracefully and say so in the
-UI. See README.md for the feature/engine matrix.
+This is a Blender extension. See blender_manifest.toml for the minimum
+version. It supports Cycles and EEVEE. A feature that needs one engine
+shows a label in the UI. See README.md for the engine matrix.
 """
 
 import bpy

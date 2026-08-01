@@ -9,9 +9,10 @@ A Look is data. It configures three layers together:
   color  : view transform / exposure bias (only when explicitly set)
   chain  : ordered compositor artifacts, built into one node group
 
-Each chain entry exposes one "strength" group-input socket named after the
-artifact (see ARTIFACTS[type]["socket"]); the engine multiplies every
-strength by the master Intensity socket, so the whole look fades as one.
+Each chain entry exposes one "strength" group-input socket. The socket
+takes its name from the artifact. See ARTIFACTS[type]["socket"]. The
+engine multiplies every strength by the master Intensity socket, so
+the whole look fades as one.
 """
 
 VALID_ASPECTS = ("4:3", "16:9", "1.66:1", "1.85:1", "2.39:1", None)
@@ -122,7 +123,7 @@ CAMERA_KEYS = {
 }
 
 COLOR_KEYS = {
-    "view_transform": None,   # str or None = don't touch user's transform
+    "view_transform": None,   # str, or None to keep the user transform
     "look": None,             # color-management look name or None
     "exposure_bias": (0.0, -5.0, 5.0),
 }
@@ -140,7 +141,8 @@ def _check_num(errors, where, key, value, lo, hi):
 
 
 def validate_look(data):
-    """Return a list of error strings; empty list means valid."""
+    """Return a list of error strings. An empty list means the look is
+    valid."""
     errors = []
     if not isinstance(data, dict):
         return ["look preset must be a JSON object"]

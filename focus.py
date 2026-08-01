@@ -73,7 +73,7 @@ class CK_OT_focus_pick(bpy.types.Operator):
         if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
             hit = self._raycast(context, event)
             if hit is None:
-                self.report({'WARNING'}, "Nothing under the cursor")
+                self.report({'WARNING'}, "No surface is under the cursor.")
                 return {'RUNNING_MODAL'}
             try:
                 self._set_focus(context, hit, new=event.ctrl)
@@ -182,11 +182,12 @@ class CK_OT_rack_focus(bpy.types.Operator):
         obj_a = scene.objects.get(self.target_a)
         obj_b = scene.objects.get(self.target_b)
         if obj_a is None or obj_b is None:
-            self.report({'ERROR'}, "Pick two focus targets (Focus Picker or "
-                                   "Add Focus Target first)")
+            self.report({'ERROR'}, "Pick two focus targets first. Use "
+                                   "Focus Picker or Add Focus Target.")
             return {'CANCELLED'}
         if obj_a == obj_b:
-            self.report({'ERROR'}, "From and To are the same target")
+            self.report({'ERROR'}, "From and To use the same target. "
+                                   "Pick two different targets.")
             return {'CANCELLED'}
 
         cam_loc = cam_obj.matrix_world.translation

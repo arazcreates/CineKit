@@ -4,6 +4,29 @@ All notable changes to CineKit are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/); version numbers match the
 Blender extension version in `blender_manifest.toml`.
 
+## [1.1.1] — 2026-07-21
+
+### Fixed
+- **Dolly rig position.** The carrier and the camera sat away from the
+  dolly track. The Follow Path constraint returns a world-space point, and
+  the parent then added the root offset a second time. The error grew with
+  the distance from the world origin. The carrier now has no parent, so it
+  sits on the track at every position.
+
+### Changed
+- Rewrote the documentation, the panel text, the error messages and the
+  code comments in plain, direct English. Each message states the problem
+  first, then the action to take.
+- The dolly operator reads a custom path source before it builds the rig.
+  A bad source no longer leaves rig objects in the scene.
+
+### Added
+- A smoke-test check for the dolly geometry. It builds a dolly far from
+  the world origin. It then asserts that the carrier sits on the track and
+  that the camera keeps its position.
+
+[1.1.1]: https://github.com/arazcreates/CineKit/releases/tag/v1.1.1
+
 ## [1.1.0] — 2026-07-20
 
 Now targets **Blender 5.2 LTS** (minimum raised to 5.2.0). Verified on

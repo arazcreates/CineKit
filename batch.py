@@ -51,12 +51,12 @@ class CK_OT_batch_render(bpy.types.Operator):
                or s.frame_end < s.frame_start]
         if bad:
             self.report({'ERROR'},
-                        "Fix these shots first (missing camera or inverted "
-                        "range): " + ", ".join(bad))
+                        "These shots need a camera or a correct "
+                        "frame range: " + ", ".join(bad))
             return {'CANCELLED'}
         if not bpy.data.filepath:
-            self.report({'ERROR'}, "Save the .blend first — batch output "
-                                   "uses the relative //renders/ folder")
+            self.report({'ERROR'}, "Save the .blend file first. The "
+                                   "batch writes to the //renders/ folder.")
             return {'CANCELLED'}
 
         self._scene_name = scene.name
@@ -114,14 +114,14 @@ class CK_OT_batch_render(bpy.types.Operator):
         result = bpy.ops.render.render('INVOKE_DEFAULT', animation=True,
                                        scene=scene.name)
         if 'CANCELLED' in result:
-            raise CKError(f"Render refused to start for shot '{shot.name}'")
+            raise CKError(f"The render did not start for shot '{shot.name}'.")
 
     def modal(self, context, event):
         if event.type == 'ESC':
             self._user_cancel = True
             self.report({'WARNING'},
-                        "Batch will stop after the current shot (or press "
-                        "ESC in the render window to abort it)")
+                        "The batch stops after the current shot. "
+                        "Press ESC in the render window to stop it now.")
         if event.type != 'TIMER':
             return {'PASS_THROUGH'}
 
@@ -163,7 +163,7 @@ class CK_OT_batch_render(bpy.types.Operator):
             self._teardown(context)
 
     def _teardown(self, context):
-        """Restore ALL mutated scene state; safe to call twice."""
+        """Restore every changed scene value. This is safe to call twice."""
         global _active
         _active = None
         wm = context.window_manager

@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Araz Creates
-"""Viewport text overlay (gpu/blf draw handler): active shot, camera, lens,
-f-stop, frame-in-shot. Engine-agnostic; pure UI drawing."""
+"""Viewport text overlay with a gpu/blf draw handler.
+
+It shows the active shot, camera, lens, f-stop and frame-in-shot.
+This module only draws the UI. It works with every render engine.
+"""
 
 import blf
 import bpy

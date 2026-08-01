@@ -27,7 +27,7 @@ class CK_OT_lens_add_user(bpy.types.Operator):
         prefs = get_prefs()
         name = prefs.new_lens_name.strip()
         if not name:
-            self.report({'ERROR'}, "Give the lens a name")
+            self.report({'ERROR'}, "Type a name for the lens.")
             return {'CANCELLED'}
         try:
             lenses.add_user_lens(name, prefs.new_lens_focal,

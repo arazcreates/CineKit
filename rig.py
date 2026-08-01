@@ -187,7 +187,7 @@ def apply_lens_preset(cam_data):
     with utils.suppress_updates():
         ck.breathing_amount = lens["breathing"]
         if ck.aperture < lens["max_aperture"]:
-            ck.aperture = lens["max_aperture"]  # lens can't open wider
+            ck.aperture = lens["max_aperture"]  # the lens does not open wider
 
 
 def set_breathing(cam_data):
@@ -218,7 +218,7 @@ def set_breathing(cam_data):
     if cam_data.dof.focus_object is not None:
         cam_obj = _object_of_camera(cam_data)
         if cam_obj is None:
-            raise CKError("Camera data has no object in the file")
+            raise CKError("This camera data has no object in the file.")
         variables = [("ck_dist", 'LOC_DIFF', cam_obj,
                       cam_data.dof.focus_object)]
     else:
@@ -259,13 +259,36 @@ HANDHELD_PROFILES = {
 
 
 def rig_root_of(obj):
-    """Walk up the parent chain to a CineKit rig root, else None."""
-    o = obj
-    while o is not None:
-        if o.get(K.TAG_RIG):
-            return o
-        o = o.parent
+    """Find the CineKit rig root for an object, or None.
+
+    A rigged camera keeps the rig id in a custom property. This lookup does
+    not use the parent chain, because some rig members stay unparented. The
+    dolly carrier is one example. The parent chain is the fallback.
+    """
+    if obj is None:
+        return None
+    rig_id = obj.get("cinekit_rig_member_of")
+    if rig_id:
+        for candidate in bpy.data.objects:
+            if candidate.get("cinekit_rig_uid") == rig_id:
+                return candidate
+    node = obj
+    while node is not None:
+        if node.get(K.TAG_RIG):
+            return node
+        node = node.parent
     return None
+
+
+def _evaluate(context):
+    """Evaluate constraints and drivers now.
+
+    Call this before a camera becomes the child of a constrained object.
+    The parent must hold its final position first.
+    """
+    view_layer = getattr(context, "view_layer", None)
+    if view_layer is not None:
+        view_layer.update()
 
 
 def _def_prop(obj, name, value, vmin, vmax, description):
@@ -292,8 +315,8 @@ def _prepare_rig(context, cam_obj, rig_type, root_name):
     utils.require_editable(cam_obj, "Camera object")
     utils.require_editable(cam_obj.data, "Camera")
     if rig_root_of(cam_obj) is not None:
-        raise CKError("Camera already belongs to a CineKit rig — "
-                      "remove it first (Rigs panel > Remove Rig)")
+        raise CKError("This camera already belongs to a CineKit rig. "
+                      "Open the Rigs panel and click Remove Rig first.")
     rig_id = utils.new_id("rig_")
     _store_prerig(cam_obj, rig_id)
     cam_obj["cinekit_rig_member_of"] = rig_id
@@ -369,6 +392,25 @@ def curve_points_world(curve_obj):
     return [mw @ p.co.to_3d() for p in spline.points]
 
 
+def _read_path_source(opts):
+    """Return world-space points from a custom path source, or an empty list.
+
+    Raise CKError if the source has fewer than 2 points. This runs before
+    the rig is built, so a bad source does not leave objects in the scene.
+    """
+    source = opts.get("path_source", 'GENERATED')
+    src_obj = opts.get("path_object")
+    if source == 'GENERATED' or src_obj is None:
+        return []
+    points = (stroke_points_world(src_obj) if source == 'GREASE_PENCIL'
+              else curve_points_world(src_obj))
+    if len(points) < 2:
+        raise CKError(
+            f"'{src_obj.name}' has no usable path. Draw a stroke, or pick a "
+            "curve with 2 or more points.")
+    return points
+
+
 def set_dolly_path(root, world_pts):
     """Replace the dolly rig's path shape with world_pts (>= 2 points).
     Points are stored in the path object's local space so the existing
@@ -378,9 +420,9 @@ def set_dolly_path(root, world_pts):
                  if o.get(K.TAG_RIG_MEMBER) == rig_id
                  and o.type == 'CURVE'), None)
     if path is None:
-        raise CKError("Dolly path object not found")
+        raise CKError("The dolly path object no longer exists.")
     if len(world_pts) < 2:
-        raise CKError("Need at least 2 points to define a path")
+        raise CKError("A path needs 2 or more points.")
     inv = path.matrix_world.inverted()
     curve = path.data
     curve.splines.clear()
@@ -393,22 +435,29 @@ def set_dolly_path(root, world_pts):
 
 
 def create_dolly(context, cam_obj, opts=None):
-    """Dolly: curve path + carrier. Props on root: ck_position (0-1,
-    keyframeable), ck_track (0-1). Banking toggles the Follow Path
-    constraint's curve-follow directly in the panel.
+    """Build a dolly rig: a curve path and a carrier that rides the path.
 
-    opts (Advanced Mode): path_length, carrier_pos, aim_distance, track,
-    banking, path_source ('GENERATED'|'CURVE'|'GREASE_PENCIL') and
-    path_object (the source curve/GP for the latter two)."""
+    The root holds ck_position (0-1, keyframeable) and ck_track (0-1). The
+    panel toggles banking on the Follow Path constraint.
+
+    Advanced Mode reads these opts: path_length, carrier_pos, aim_distance,
+    track, banking, path_source ('GENERATED', 'CURVE' or 'GREASE_PENCIL')
+    and path_object. path_object is the source curve or Grease Pencil
+    object for the last two modes.
+    """
     opts = opts or {}
     half = opts.get("path_length", 6.0) / 2.0
     carrier_pos = opts.get("carrier_pos", 0.5)
     aim_distance = opts.get("aim_distance", 5.0)
+    # Read a custom path source first. A failure must not leave a
+    # half-built rig in the scene.
+    custom_points = _read_path_source(opts)
     scene = context.scene
     root, rig_id = _prepare_rig(context, cam_obj, K.RIG_DOLLY, "CK_Dolly")
     _point(root, "Base")
-    # Root sits at the camera; the path runs ±half m along the camera's local
-    # X, so ck_position=0.5 keeps the camera at its original spot.
+    # The root sits at the camera. The path runs half a length each
+    # way along the local X of the camera. A ck_position of 0.5 keeps
+    # the camera at its first position.
     root.matrix_world = Matrix.Translation(cam_obj.matrix_world.translation)
 
     curve = bpy.data.curves.new("CK_DollyPath", 'CURVE')
@@ -431,8 +480,11 @@ def create_dolly(context, cam_obj, opts=None):
 
     carrier = _member(scene, rig_id, "CK_Dolly_Carrier", display='CUBE',
                       size=0.2)
-    _point(carrier, "Carrier", movable=False)  # location driven by ck_position
-    carrier.parent = root
+    _point(carrier, "Carrier", movable=False)  # ck_position drives this
+    # The carrier has no parent on purpose. The Follow Path constraint
+    # returns a world-space point on the curve. A parent applies the root
+    # offset a second time and moves the carrier off the track. The path
+    # stays a child of the root, so the rig still moves as one unit.
     con = carrier.constraints.new('FOLLOW_PATH')
     con.name = CON_PREFIX + "Follow Path"
     con.target = path
@@ -464,18 +516,13 @@ def create_dolly(context, cam_obj, opts=None):
     utils.add_driver(cam_obj, f'constraints["{track.name}"].influence',
                      "ck_trk", [("ck_trk", root, '["ck_track"]')])
 
+    # Shape the track before the camera becomes a child of the carrier.
+    if custom_points:
+        set_dolly_path(root, custom_points)
+    # The carrier must reach its final position on the track first. The
+    # camera keeps its world transform when it becomes a child.
+    _evaluate(context)
     _parent_keep_world(cam_obj, carrier)
-
-    # Custom path from a drawn Grease Pencil stroke or an existing curve.
-    source = opts.get("path_source", 'GENERATED')
-    src_obj = opts.get("path_object")
-    if source != 'GENERATED' and src_obj is not None:
-        pts = (stroke_points_world(src_obj) if source == 'GREASE_PENCIL'
-               else curve_points_world(src_obj))
-        if len(pts) >= 2:
-            set_dolly_path(root, pts)
-        else:
-            raise CKError("Selected path source has no usable stroke/points")
     return root
 
 
@@ -528,7 +575,7 @@ def create_handheld(context, cam_obj, profile='DOCUMENTARY', opts=None):
     opts (Advanced Mode): intensity."""
     opts = opts or {}
     if profile not in HANDHELD_PROFILES:
-        raise CKError(f"Unknown handheld profile '{profile}'")
+        raise CKError(f"There is no handheld profile named '{profile}'.")
     scene = context.scene
     root, rig_id = _prepare_rig(context, cam_obj, K.RIG_HANDHELD,
                                 "CK_Handheld")
@@ -624,7 +671,7 @@ def orbit_one_revolution(scene, root):
     frame range (product-shot turntable)."""
     frames = scene.frame_end - scene.frame_start + 1
     if frames < 2:
-        raise CKError("Scene frame range is too short for a revolution")
+        raise CKError("The scene frame range is too short for one revolution.")
     fps = scene.render.fps / scene.render.fps_base
     root["ck_speed"] = 360.0 * fps / frames
     root.update_tag()
@@ -641,7 +688,7 @@ def remove_rig(context, root):
     parent, and remove CineKit constraints/drivers."""
     rig_id = root.get("cinekit_rig_uid")
     if not rig_id:
-        raise CKError("Selected object is not a CineKit rig root")
+        raise CKError("The selected object is not a CineKit rig root.")
 
     for cam_obj in _cameras_in_rig(rig_id):
         for con in list(cam_obj.constraints):

@@ -2,10 +2,11 @@
 # Copyright (C) 2026 Araz Creates
 """Shot management: shot list operators, marker sync, frame-change handler.
 
-The shot list is the source of truth; markers (with marker.camera) are
-rebuilt from it so playback switches cameras natively. The frame-change
-handler is O(1) with early-out: it only rescans when the playhead leaves
-the cached current shot's range or the active camera changed.
+The shot list is the source of truth. CineKit rebuilds the markers from
+it and binds marker.camera, so playback switches cameras natively. The
+frame-change handler does O(1) checks and leaves early. It rescans only
+when the playhead leaves the cached shot range. It also rescans when
+the active camera changes.
 """
 
 import bpy
@@ -46,8 +47,10 @@ def active_shot(scene):
 
 
 def on_frame_change(scene):
-    """Called from the persistent frame_change_post handler. Cheap checks
-    first; look application only on shot-boundary crossing."""
+    """Run from the persistent frame_change_post handler.
+
+    Do the cheap checks first. Apply a look only at a shot boundary.
+    """
     ck = scene.cinekit
     if not ck.shots or not ck.auto_switch_shot_look:
         return
@@ -191,7 +194,7 @@ class CK_OT_shot_jump(bpy.types.Operator):
         ck = scene.cinekit
         idx = self.index if self.index >= 0 else ck.shot_index
         if not 0 <= idx < len(ck.shots):
-            self.report({'ERROR'}, "No shot selected")
+            self.report({'ERROR'}, "Select a shot first.")
             return {'CANCELLED'}
         ck.shot_index = idx
         try:
@@ -219,7 +222,7 @@ class CK_OT_shot_set_range(bpy.types.Operator):
         shot = scene.cinekit.shots[scene.cinekit.shot_index]
         if shot.frame_end < shot.frame_start:
             self.report({'ERROR'},
-                        f"Shot '{shot.name}' has end before start")
+                        f"Shot '{shot.name}' ends before it starts.")
             return {'CANCELLED'}
         scene.frame_start = shot.frame_start
         scene.frame_end = shot.frame_end
@@ -254,7 +257,8 @@ class CK_OT_shots_sync_markers(bpy.types.Operator):
             marker.camera = shot.camera
         if skipped:
             self.report({'WARNING'},
-                        f"{skipped} shot(s) skipped — no camera assigned")
+                        f"CineKit skipped {skipped} shot(s). They "
+                        "have no camera.")
         return {'FINISHED'}
 
 

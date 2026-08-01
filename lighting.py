@@ -178,8 +178,8 @@ class CK_OT_light_setup_remove(bpy.types.Operator):
         coll = next((c for c in bpy.data.collections
                      if c.get(K.TAG_LIGHT_SETUP) == self.setup_uid), None)
         if coll is None:
-            self.report({'ERROR'}, "Setup collection not found (already "
-                                   "deleted?)")
+            self.report({'ERROR'}, "The setup collection no longer "
+                                   "exists.")
             return {'CANCELLED'}
         for obj in list(coll.objects):
             data = obj.data
@@ -232,8 +232,8 @@ class CK_OT_gobo_add(bpy.types.Operator):
 
     def execute(self, context):
         if not self.gobo:
-            self.report({'ERROR'}, "No gobo textures found in the extension "
-                                   "data/gobos folder")
+            self.report({'ERROR'}, "The data/gobos folder has no gobo "
+                                   "textures.")
             return {'CANCELLED'}
         obj = context.active_object
         method = self.method
@@ -245,12 +245,13 @@ class CK_OT_gobo_add(bpy.types.Operator):
             if method == 'NODES':
                 self._apply_nodes(obj, image)
                 self.report({'INFO'},
-                            "Gobo in light nodes — affects Cycles only")
+                            "CineKit added the gobo to the light "
+                            "nodes. This works in Cycles only.")
             else:
                 self._apply_plane(context, obj, image)
                 self.report({'INFO'},
-                            "Gobo shadow plane added — works in EEVEE Next "
-                            "and Cycles")
+                            "CineKit added a gobo shadow plane. "
+                            "This works in EEVEE and in Cycles.")
         except CKError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -275,8 +276,8 @@ class CK_OT_gobo_add(bpy.types.Operator):
             nt.nodes.remove(node)  # idempotent re-apply
         emission = next((n for n in nt.nodes if n.type == 'EMISSION'), None)
         if emission is None:
-            raise CKError("Light node tree has no Emission node — reset "
-                          "the light's nodes and retry")
+            raise CKError("The light node tree has no Emission node. "
+                          "Reset the light nodes, then try again.")
 
         def new(node_type, x, y, **props):
             node = nt.nodes.new(node_type)
@@ -384,7 +385,7 @@ class CK_OT_gobo_add(bpy.types.Operator):
         plane.data.materials.clear()
         plane.data.materials.append(mat)
         if hasattr(plane, "visible_camera"):
-            plane.visible_camera = False  # Cycles honours this; EEVEE can't
+            plane.visible_camera = False  # Cycles obeys this. EEVEE does not.
 
 
 class CK_OT_gobo_remove(bpy.types.Operator):
@@ -433,7 +434,7 @@ class CK_OT_gobo_remove(bpy.types.Operator):
                     if i.name.startswith("gobo_") and i.users == 0]:
             bpy.data.images.remove(img)
         if not removed:
-            self.report({'INFO'}, "No CineKit gobo found on this light")
+            self.report({'INFO'}, "This light has no CineKit gobo.")
         return {'FINISHED'}
 
 
@@ -455,7 +456,8 @@ class CK_OT_lightlink_new(bpy.types.Operator):
     def execute(self, context):
         obj = context.active_object
         if obj.light_linking.receiver_collection is not None:
-            self.report({'INFO'}, "Light already has a receiver collection")
+            self.report({'INFO'},
+                    "This light already has a receiver collection.")
             return {'CANCELLED'}
         coll = bpy.data.collections.new(f"CK LightLink {obj.name}")
         coll[K.TAG] = utils.new_id("ll_")

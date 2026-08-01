@@ -16,6 +16,7 @@ import os
 import sys
 
 import bpy
+from mathutils import Matrix, Vector
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(ROOT))
@@ -85,7 +86,7 @@ def run():
     lighting = sys.modules[f"{PKG}.lighting"]
 
     scene, cam_obj, cube = build_stage()
-    # Pre-create the CineKit collection so it doesn't count as a leak.
+    # Create the CineKit collection first, so it is not a leak.
     utils.ck_collection(scene)
     comp_tree_before = engine._get_comp_tree(scene)
 
@@ -124,6 +125,40 @@ def run():
                     for a, b in zip(row_a, row_b))
         check(f"{name}: camera transform restored", delta < 1e-5,
               f"(max delta {delta:.2e})")
+
+    # ------------------------------------------------------- dolly geometry
+    # Regression guard for the 1.1.1 fix. A parented carrier applied the
+    # root offset a second time and left the carrier off the track. The
+    # error grew with the distance from the world origin, so this test
+    # puts the camera far out.
+    print("\n== Dolly geometry ==")
+    before = snapshot()
+    saved_cam = cam_obj.matrix_world.copy()
+    cam_obj.matrix_world = Matrix.Translation(Vector((25.0, -8.0, 15.0)))
+    start = cam_obj.matrix_world.translation.copy()
+    root = rig.create_dolly(bpy.context, cam_obj)
+    bpy.context.view_layer.update()
+    carrier = next(o for o in bpy.data.objects
+                   if o.get("cinekit_point_role") == "Carrier")
+    # ck_position 0.5 puts the carrier at the middle of the track. The
+    # track is centered on the root.
+    off_track = (carrier.matrix_world.translation
+                 - root.matrix_world.translation).length
+    check("dolly: carrier sits on the track", off_track < 1e-3,
+          f"(off by {off_track:.3f} m)")
+    moved = (cam_obj.matrix_world.translation - start).length
+    check("dolly: camera keeps its position", moved < 1e-3,
+          f"(moved {moved:.3f} m)")
+    root["ck_position"] = 1.0
+    root.update_tag()  # a custom-property write needs an explicit tag
+    bpy.context.view_layer.update()
+    travel = (carrier.matrix_world.translation
+              - root.matrix_world.translation).length
+    check("dolly: ck_position drives travel", travel > 1.0,
+          f"(travelled {travel:.2f} m)")
+    rig.remove_rig(bpy.context, root)
+    cam_obj.matrix_world = saved_cam
+    compare("dolly geometry: counts restored", before, snapshot())
 
     # ---------------------------------------------------- advanced rig mode
     print("\n== Advanced rigs ==")

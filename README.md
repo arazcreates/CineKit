@@ -8,14 +8,15 @@
 
 A cinematography, lighting and camera-look toolkit for **Blender 5.2 LTS**
 (Extensions platform, `blender_manifest.toml`). Pure Python, no external
-dependencies. GPL-3.0-or-later; shipped gobo textures are CC0-1.0.
+dependencies. The license is GPL-3.0-or-later. The gobo textures use
+CC0-1.0.
 
 ## Blender version compatibility
 
 Requires and is verified on **Blender 5.2 LTS** — both an automated smoke
 test and hands-on testing in the Blender 5.2 UI. The source is written
 portably across the Blender 4.2 → 5.x API break, so it also runs on the
-older 4.2–5.1 series; those compatibility helpers are kept in place:
+older 4.2-5.1 series. CineKit keeps those compatibility helpers:
 
 | Area | 4.2-4.x | 5.x |
 |---|---|---|
@@ -57,18 +58,19 @@ folder into your extensions repo. Requires Blender **5.2 LTS** or later.
 | Looks — compositor layer | ✅ | ✅ | enable the **Viewport Compositor** to preview |
 | Looks — camera layer (crop, deep DOF) | ✅ | ✅ | visible in any viewport |
 
-Cycles-only features hide or show an info label when EEVEE Next is active;
-switching engines never errors, and re-applying a Look after an engine
-switch reconciles cleanly.
+Cycles-only features hide, or they show an info label, when EEVEE is
+active. An engine switch never raises an error. A Look that you apply
+again after an engine switch reconciles cleanly.
 
 ## The pieces
 
 ### Physical Camera (Camera data panel + CineKit N-panel)
 ISO, aperture (f-stop), shutter as 1/x or shutter angle. CineKit computes
 **EV100** (`optics.py`, ISO 2720 with K = 12.5) and drives
-`scene.view_settings.exposure` via update callbacks; the **active** camera
-owns exposure and motion blur — switching cameras (including marker
-switches) re-syncs via a msgbus subscription. "Release Exposure Control"
+`scene.view_settings.exposure` through update callbacks. The
+**active** camera owns exposure and motion blur. A camera switch
+includes a marker switch, and it re-syncs through a msgbus
+subscription. "Release Exposure Control"
 restores the exposure that was set before CineKit took over.
 
 **White balance approach (documented):** on Blender 4.3+ CineKit uses the
@@ -80,7 +82,7 @@ the final render. We deliberately do **not** bend the user's view-transform
 curves: that would fight custom OCIO configs.
 
 Lens presets are JSON (`data/lenses.json`, ~16 primes/zooms with focal
-length, max aperture, breathing amount); add your own in the add-on
+length, max aperture, breathing amount). Add your own in the add-on
 preferences (stored in the extension user directory). **Auto Expose** is a
 one-shot *assist*: it samples a low-res offscreen render of the camera view
 (scene-referred, geometric-mean luminance) and sets ISO to hit the target
@@ -96,15 +98,16 @@ UIList of shots (camera + frame range + look + notes). *New Shot from
 Active Camera*, *Jump to Shot* (sets camera, frame and look), *Duplicate*,
 *Set Scene Range to Shot*. **Sync Markers** rebuilds `CK:`-prefixed
 timeline markers with `marker.camera` bound — playback switches cameras
-natively; user markers are never touched. The shot list stays the source of
-truth. Per-shot looks apply automatically during playback via a
+natively. CineKit never touches your own markers. The shot list stays
+the source of truth. Per-shot looks apply automatically during playback via a
 frame-change handler that does O(1) early-out checks (rescans only on
 boundary crossings).
 
 **Batch Render** renders each shot's range to `//renders/<shot>/` with its
-camera and look, as a modal operator with ESC-to-stop; frame range, camera,
-look and output path are restored afterwards even on cancel or exception,
-and a `cinekit_batch_summary.json` is written.
+camera and look. It is a modal operator, and ESC stops it. CineKit
+restores the frame range, the camera, the look and the output path
+afterwards. It does this after a cancel and after an error. It also
+writes a `cinekit_batch_summary.json` file.
 
 The optional **viewport overlay** (gpu/blf draw handler) shows shot name,
 camera, lens, f-stop, EV and frame-in-shot.
@@ -113,11 +116,12 @@ camera, lens, f-stop, EV and frame-in-shot.
 All rigs are empty hierarchies with drivers and custom properties, created
 from the active camera, tracked with `cinekit_id` tags and removable with
 exact restore of the camera's pre-rig transform and parent. CineKit
-constraints are identified by the `CK ` name prefix (constraints can't
-carry custom properties).
+constraints use the `CK ` name prefix, because a constraint cannot
+carry custom properties.
 
-- **Dolly** — curve path + carrier; `ck_position` (0-1, keyframeable),
-  banking (curve follow), `ck_track` aim tracking.
+- **Dolly** — a curve path and a carrier. It has `ck_position` (0-1,
+  keyframeable), banking (curve follow) and `ck_track` aim tracking.
+  The carrier rides the track at every position.
 - **Crane/Jib** — pan → boom → arm length → tilt (tilt is
   level-compensated against the boom).
 - **Handheld** — F-modifier noise (no per-frame handlers) on a shake
@@ -141,12 +145,12 @@ they keep evaluating even with the add-on disabled.
 
 ### Focus
 - **Focus Picker**: modal click-to-focus via `scene.ray_cast` on the
-  evaluated depsgraph; places/moves a Focus Target empty and points the
-  camera's DOF at it (Ctrl-click adds a new target). ESC cancels; stale
-  modal state is cleared on file load.
+  evaluated depsgraph. It places or moves a Focus Target empty, then
+  points the camera DOF at it. Ctrl-click adds a new target. ESC
+  cancels. CineKit clears stale modal state when you load a file.
 - **Rack Focus**: keyframes DOF distance from target A to B over N frames
-  with linear / smooth / snap easing; the rack is stored on the active
-  shot.
+  with linear, smooth or snap easing. CineKit stores the rack on the
+  active shot.
 - **DOF readout**: hyperfocal, near/far limits and total depth of field
   from standard thin-lens formulas in `optics.py` (pure Python,
   unit-tested).
@@ -162,9 +166,9 @@ CineKit light (across setups) with power/color/size in one place.
 
 **Gobos**: 20 procedurally generated CC0 textures (windows, blinds,
 foliage, cucolorises — regenerate with `python tools/generate_gobos.py`).
-On Cycles the gobo is projected through the light's node tree; on EEVEE
-Next a textured shadow plane is parented in front of the light (stated in
-the UI). Images are packed into the .blend — no absolute paths.
+Cycles projects the gobo through the light node tree. In EEVEE,
+CineKit parents a textured shadow plane in front of the light. The UI
+states which method it uses. Images are packed into the .blend — no absolute paths.
 
 **Light linking** (Cycles only): a small front-end for receiver
 collections — create, add selected objects, remove members.
@@ -176,9 +180,10 @@ field in `data/looks/*.json` for the parameter reasoning):
 1. **Camera/optics** — real sensor width, aspect crop, forced minimum
    f-stop, breathing scale. *This* is why Digicam 2005 has deep focus (a
    5.76 mm sensor at f/8, not fake blur) and VHS is 4:3 (sensor crop +
-   render resolution) — and it's visible in any viewport.
+   render resolution). You see it in every viewport.
 2. **Render/color** — view transform / exposure bias, only when the look
-   explicitly sets one; the previous transform is stored and restored.
+   explicitly sets one. CineKit stores the previous transform, then
+   restores it.
 3. **Compositor** — a generated node group `CK_Look_<Name>` built from
    parameters (YCC chroma bleed, animated noise/dropouts, displaced
    time-base wobble, glare halation, programmatic tone curves…), no baked
@@ -186,24 +191,24 @@ field in `data/looks/*.json` for the parameter reasoning):
 
 The pipeline is **one** group node inserted in-line before the Composite
 node. Existing compositor setups are wrapped, never replaced: the original
-link into Composite is stored and *exactly* restored on removal; if
+link into Composite is stored, and removal restores it *exactly*. If
 `use_nodes` was off, removal returns the scene to `use_nodes = False`.
-Applying the same look twice is idempotent; re-applying updates socket
-values in place (no rebuild, no hitch) — rebuilds happen only on look-type
-switches. Every artifact exposes a strength slider (scene-level, editable
+The same look applied twice is idempotent. A second apply updates the
+socket values in place, with no rebuild and no hitch. A rebuild happens
+only on a look-type switch. Every artifact exposes a strength slider (scene-level, editable
 in the 3D View and compositor N-panels) multiplied by a master Intensity.
 **Save as Custom Look** writes a user JSON preset to the extension's user
 preferences directory.
 
-**Security Cam frame-rate feel**: don't change the scene FPS. Render
+**Security Cam frame-rate feel**: do not change the scene FPS. Render
 normally, then either hold keys every 3–4 frames in the action, or use a
 Sequencer *Speed Control* effect strip in "Frame Number" mode to step
 time. This keeps physics, motion blur and audio sane.
 
 ## Data hygiene
 Everything CineKit creates carries a `cinekit_id` custom property and goes
-in the **CineKit** collection; operators find-and-update instead of
-piling up, and every *Add X* has a *Remove X* that deletes only tagged data
+in the **CineKit** collection. Operators find and update, so data does
+not pile up. Every *Add X* has a *Remove X* that deletes only tagged data
 and restores stored prior state (camera transform, compositor links, scene
 exposure, view transform, render resolution). Linked/library cameras,
 lights and node trees are detected and grayed out with an explanation
@@ -243,7 +248,7 @@ Copyright © 2026 **Araz Creates**.
 CineKit is free software licensed under the **GNU General Public License
 v3.0 or later (GPL-3.0-or-later)** — see [LICENSE](LICENSE) for the full
 text. Blender add-ons use Blender's GPL-licensed Python API, so they must
-themselves be GPL-compatible; CineKit is and always will be.
+themselves be GPL-compatible. CineKit is, and it always will be.
 
 The procedurally generated gobo textures (`data/gobos/*.png`) and their
 generator script (`tools/generate_gobos.py`) are released separately into

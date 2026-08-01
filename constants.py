@@ -27,8 +27,8 @@ PIPELINE_GROUP = "CK_Pipeline"     # inserted compositor group (WB + look slot)
 LOOK_GROUP_PREFIX = "CK_Look_"     # per-look node group datablocks
 MARKER_PREFIX = "CK:"              # timeline markers owned by the shot list
 
-# EEVEE Next is 'BLENDER_EEVEE_NEXT' in 4.2-4.x; Blender 5 renamed it back
-# to 'BLENDER_EEVEE'. Compare against EEVEE_IDS, never a single id.
+# Blender 4.2-4.x uses 'BLENDER_EEVEE_NEXT'. Blender 5 renamed it
+# back to 'BLENDER_EEVEE'. Compare against EEVEE_IDS, never one id.
 EEVEE = "BLENDER_EEVEE_NEXT"
 EEVEE_IDS = ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE")
 CYCLES = "CYCLES"
