@@ -15,10 +15,10 @@ from .utils import CKError
 class CK_OT_auto_expose(bpy.types.Operator):
     bl_idname = "cinekit.auto_expose"
     bl_label = "Auto Expose (Assist)"
-    bl_description = ("One-shot assist: sample viewport luminance through "
-                      "the active camera (low-res offscreen render) and set "
-                      "ISO so the average lands on middle grey. Sets values "
-                      "once — does not animate")
+    bl_description = ("Measure the viewport brightness through the active "
+                      "camera and set the ISO, so the average is middle "
+                      "grey. CineKit sets the values one time and does not "
+                      "animate them")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -33,6 +33,19 @@ class CK_OT_auto_expose(bpy.types.Operator):
         scene = context.scene
         cam_obj = scene.camera
         ck = cam_obj.data.cinekit
+        shading = context.space_data.shading
+        if shading.type in {'SOLID', 'WIREFRAME'}:
+            self.report({'ERROR'}, "Auto Expose reads the lit viewport. "
+                                   "Switch the viewport to Material Preview "
+                                   "or Rendered shading.")
+            return {'CANCELLED'}
+        if shading.type == 'MATERIAL' and not (
+                shading.use_scene_lights and shading.use_scene_world):
+            self.report({'ERROR'}, "Material Preview uses a studio light, "
+                                   "not your scene lights. Turn on Scene "
+                                   "Lights and Scene World in the shading "
+                                   "popover, or use Rendered shading.")
+            return {'CANCELLED'}
         size = 96
         try:
             offscreen = gpu.types.GPUOffScreen(size, size)
@@ -66,12 +79,13 @@ class CK_OT_auto_expose(bpy.types.Operator):
         from . import preferences
         target = preferences.get_prefs().target_grey
         needed_exposure = math.log2(target / l_avg)
-        bias = float(scene.get("cinekit_look_bias", 0.0))
         fps = scene.render.fps / scene.render.fps_base
         time_s = optics.shutter_time_s(ck.shutter_mode, ck.shutter_speed,
                                        ck.shutter_angle, fps)
-        # scene_exposure = CAL - EV + comp + bias  =>  solve EV, then ISO.
-        ev_target = (optics.EXPOSURE_CALIBRATION + ck.exposure_comp + bias
+        # scene_exposure = CAL - EV + comp + bias. Solve EV so that
+        # CAL - EV + comp = needed. The look bias stays on top of the
+        # metered exposure, and removing the look gives the metered value.
+        ev_target = (optics.EXPOSURE_CALIBRATION + ck.exposure_comp
                      - needed_exposure)
         iso = 100.0 * (ck.aperture ** 2 / time_s) / (2.0 ** ev_target)
         iso_clamped = int(min(max(iso, 25), 204800))
@@ -91,9 +105,8 @@ class CK_OT_auto_expose(bpy.types.Operator):
 class CK_OT_release_exposure(bpy.types.Operator):
     bl_idname = "cinekit.release_exposure"
     bl_label = "Release Exposure Control"
-    bl_description = ("Restore the scene exposure and white balance that "
-                      "were in place before CineKit's physical camera took "
-                      "over")
+    bl_description = ("Give back the scene exposure and white balance from "
+                      "before CineKit took control")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -142,22 +155,22 @@ class _RigCreateBase(bpy.types.Operator):
 class CK_OT_rig_dolly(_RigCreateBase):
     bl_idname = "cinekit.rig_dolly"
     bl_label = "Add Dolly Rig"
-    bl_description = ("Put the active camera on a dolly path with a "
-                      "0-1 position property, optional banking and target "
-                      "tracking")
+    bl_description = ("Put the active camera on a dolly path. The rig has a "
+                      "position from 0 to 1, optional banking and optional "
+                      "target tracking")
 
     path_length: bpy.props.FloatProperty(
         name="Path Length", description="Length of the straight dolly track",
         default=6.0, min=0.5, max=200.0, subtype='DISTANCE')
     carrier_pos: bpy.props.FloatProperty(
-        name="Start Position", description="Where the camera starts along "
-        "the path (0-1)", default=0.5, min=0.0, max=1.0)
+        name="Start Position", description="Where the camera starts on "
+        "the path, from 0 to 1", default=0.5, min=0.0, max=1.0)
     aim_distance: bpy.props.FloatProperty(
         name="Aim Distance", description="How far ahead the aim target sits",
         default=5.0, min=0.1, max=200.0, subtype='DISTANCE')
     track: bpy.props.FloatProperty(
-        name="Track Aim", description="Lock the camera onto the aim target "
-        "(0 = free, 1 = locked)", default=0.0, min=0.0, max=1.0)
+        name="Track Aim", description="Lock the camera on the aim target. "
+        "0 is free, 1 is locked", default=0.0, min=0.0, max=1.0)
     banking: bpy.props.BoolProperty(
         name="Banking", description="Bank the camera into path curves",
         default=False)
@@ -166,7 +179,7 @@ class CK_OT_rig_dolly(_RigCreateBase):
         items=(('GENERATED', "Straight track (generated)",
                 "Auto-build a straight dolly track"),
                ('CURVE', "Selected curve",
-                "Use the shape of another selected curve object"),
+                "Use the shape of a selected curve object"),
                ('GREASE_PENCIL', "Grease pencil",
                 "Use a stroke you drew with a selected Grease Pencil "
                 "object")),
@@ -207,14 +220,17 @@ class CK_OT_rig_dolly(_RigCreateBase):
 class CK_OT_rig_crane(_RigCreateBase):
     bl_idname = "cinekit.rig_crane"
     bl_label = "Add Crane Rig"
-    bl_description = ("Put the active camera on a crane/jib: pan, boom, arm "
-                      "length and tilt properties")
+    bl_description = ("Put the active camera on a crane. The base sits "
+                      "behind and below the camera, and the arm reaches the "
+                      "camera. The rig has pan, boom, arm length and tilt")
 
     base_drop: bpy.props.FloatProperty(
-        name="Base Drop", description="How far below the camera the crane "
-        "base sits", default=1.5, min=0.0, max=20.0, subtype='DISTANCE')
+        name="Base Drop", description="Vertical distance from the crane "
+        "base up to the camera", default=1.5, min=0.2, max=20.0,
+        subtype='DISTANCE')
     boom: bpy.props.FloatProperty(
-        name="Boom Angle", default=45.0, min=-80.0, max=80.0)
+        name="Boom Angle", description="Start angle of the arm above "
+        "horizontal", default=45.0, min=10.0, max=80.0)
     tilt: bpy.props.FloatProperty(
         name="Head Tilt", default=0.0, min=-90.0, max=90.0)
 
@@ -229,8 +245,8 @@ class CK_OT_rig_crane(_RigCreateBase):
 class CK_OT_rig_handheld(_RigCreateBase):
     bl_idname = "cinekit.rig_handheld"
     bl_label = "Add Handheld Rig"
-    bl_description = ("Procedural handheld noise (F-modifiers, no handlers) "
-                      "with a keyframeable intensity master")
+    bl_description = ("Add handheld shake on top of the animation of the "
+                      "camera. You can keyframe the intensity from 0 to 2")
 
     profile: bpy.props.EnumProperty(
         name="Profile",
@@ -250,8 +266,8 @@ class CK_OT_rig_handheld(_RigCreateBase):
 class CK_OT_rig_orbit(_RigCreateBase):
     bl_idname = "cinekit.rig_orbit"
     bl_label = "Add Orbit Rig"
-    bl_description = ("Turntable orbit around the camera's focus point with "
-                      "radius/height/speed properties")
+    bl_description = ("Orbit the camera around its focus point. The rig has "
+                      "radius, height and speed")
 
     speed: bpy.props.FloatProperty(
         name="Speed °/s", default=30.0, min=-720.0, max=720.0)
@@ -266,8 +282,8 @@ class CK_OT_rig_orbit(_RigCreateBase):
 class CK_OT_rig_select_point(bpy.types.Operator):
     bl_idname = "cinekit.rig_select_point"
     bl_label = "Select Rig Point"
-    bl_description = ("Select and activate this rig point so you can move it "
-                      "(press G) directly in the viewport")
+    bl_description = ("Select this rig point and make it active. Then press "
+                      "G to move it in the viewport")
     bl_options = {'REGISTER', 'UNDO'}
 
     object_name: bpy.props.StringProperty()
@@ -277,6 +293,11 @@ class CK_OT_rig_select_point(bpy.types.Operator):
         if obj is None:
             self.report({'ERROR'}, "The rig point no longer exists. Remove "
                                    "the rig, then add it again.")
+            return {'CANCELLED'}
+        if obj.name not in context.view_layer.objects:
+            self.report({'ERROR'}, "The rig point is not in this view "
+                                   "layer. Include the CineKit collection "
+                                   "in the view layer, then try again.")
             return {'CANCELLED'}
         for other in list(context.selected_objects):
             other.select_set(False)
@@ -297,8 +318,8 @@ class _DollyActive:
 class CK_OT_rig_path_from_gp(_DollyActive, bpy.types.Operator):
     bl_idname = "cinekit.rig_path_from_gp"
     bl_label = "Dolly Path from Grease Pencil"
-    bl_description = ("Rebuild the active dolly's path from a stroke you "
-                      "drew — select the Grease Pencil object first")
+    bl_description = ("Build the dolly path again from a drawn stroke. "
+                      "Select the Grease Pencil object first")
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
@@ -317,7 +338,8 @@ class CK_OT_rig_path_from_gp(_DollyActive, bpy.types.Operator):
                                    "more points.")
             return {'CANCELLED'}
         try:
-            rig.set_dolly_path(rig.rig_root_of(context.scene.camera), pts)
+            rig.apply_dolly_path(context,
+                                 rig.rig_root_of(context.scene.camera), pts)
         except CKError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -329,8 +351,8 @@ class CK_OT_rig_path_from_gp(_DollyActive, bpy.types.Operator):
 class CK_OT_rig_path_from_curve(_DollyActive, bpy.types.Operator):
     bl_idname = "cinekit.rig_path_from_curve"
     bl_label = "Dolly Path from Selected Curve"
-    bl_description = ("Rebuild the active dolly's path from another selected "
-                      "curve object's shape")
+    bl_description = ("Build the dolly path again from the shape of a "
+                      "selected curve object")
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
@@ -347,7 +369,8 @@ class CK_OT_rig_path_from_curve(_DollyActive, bpy.types.Operator):
                                    "Add points to the curve.")
             return {'CANCELLED'}
         try:
-            rig.set_dolly_path(rig.rig_root_of(context.scene.camera), pts)
+            rig.apply_dolly_path(context,
+                                 rig.rig_root_of(context.scene.camera), pts)
         except CKError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -359,8 +382,8 @@ class CK_OT_rig_path_from_curve(_DollyActive, bpy.types.Operator):
 class CK_OT_rig_remove(bpy.types.Operator):
     bl_idname = "cinekit.rig_remove"
     bl_label = "Remove Rig"
-    bl_description = ("Delete the rig and restore the camera's pre-rig "
-                      "transform and parent")
+    bl_description = ("Delete the rig. The camera gets back its transform "
+                      "and its parent from before the rig")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -381,8 +404,8 @@ class CK_OT_rig_remove(bpy.types.Operator):
 class CK_OT_orbit_one_rev(bpy.types.Operator):
     bl_idname = "cinekit.orbit_one_revolution"
     bl_label = "One Revolution Over Frame Range"
-    bl_description = ("Set orbit speed so the camera completes exactly one "
-                      "revolution across the scene frame range")
+    bl_description = ("Set the orbit speed, so the camera makes exactly one "
+                      "revolution over the scene frame range")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod

@@ -10,7 +10,7 @@ shows a label in the UI. See README.md for the engine matrix.
 import bpy
 
 from . import (batch, camera_ops, focus, handlers, lenses, lighting, looks,
-               overlay, preferences, properties, shots, ui)
+               migrate, overlay, preferences, properties, shots, ui)
 from .looks import ops as look_ops
 
 _CLASS_MODULES = (

@@ -3,6 +3,7 @@
 """Look operators: apply, remove, save-as-custom, reload registry."""
 
 import os
+import zlib
 
 import bpy
 
@@ -15,9 +16,9 @@ from . import engine, schema
 class CK_OT_look_apply(bpy.types.Operator):
     bl_idname = "cinekit.look_apply"
     bl_label = "Apply Look"
-    bl_description = ("Apply a look: camera optics + color management + "
-                      "compositor artifacts together. Fast in-place update "
-                      "when re-applying the same look")
+    bl_description = ("Apply a look. A look changes the camera, the color "
+                      "management and the compositor together. Applying the "
+                      "same look again only updates its values")
     bl_options = {'REGISTER', 'UNDO'}
 
     look: bpy.props.EnumProperty(name="Look", items=enum_items)
@@ -42,9 +43,9 @@ class CK_OT_look_apply(bpy.types.Operator):
 class CK_OT_look_remove(bpy.types.Operator):
     bl_idname = "cinekit.look_remove"
     bl_label = "Remove Look"
-    bl_description = ("Remove the active look and restore camera, color "
-                      "management and the exact prior compositor "
-                      "connections")
+    bl_description = ("Remove the active look. CineKit restores the camera, "
+                      "the color management and the compositor connections "
+                      "from before the look")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -63,9 +64,9 @@ class CK_OT_look_remove(bpy.types.Operator):
 class CK_OT_look_save_custom(bpy.types.Operator):
     bl_idname = "cinekit.look_save_custom"
     bl_label = "Save as Custom Look"
-    bl_description = ("Save the active look with your current parameter "
-                      "values as a user preset (JSON in the extension's "
-                      "user preferences directory)")
+    bl_description = ("Save the active look with your current values as a "
+                      "user preset. CineKit writes a JSON file to the user "
+                      "folder of the extension")
     bl_options = {'REGISTER'}
 
     preset_name: bpy.props.StringProperty(name="Name", default="My Look")
@@ -81,14 +82,14 @@ class CK_OT_look_save_custom(bpy.types.Operator):
         scene = context.scene
         base = get(scene.cinekit.active_look)
         if base is None:
-            self.report({'ERROR'}, "Active look not found in the registry")
+            self.report({'ERROR'}, "CineKit cannot find the active look in "
+                                   "the preset list.")
             return {'CANCELLED'}
         name = self.preset_name.strip()
         if not name:
-            self.report({'ERROR'}, "Give the preset a name")
+            self.report({'ERROR'}, "Type a name for the preset.")
             return {'CANCELLED'}
-        look_id = "custom_" + "".join(
-            c if c.isalnum() else "_" for c in name.lower()).strip("_")
+        look_id = "custom_" + custom_slug(name)
 
         data = {
             "id": look_id,
@@ -111,24 +112,45 @@ class CK_OT_look_save_custom(bpy.types.Operator):
         try:
             schema.normalize_look(data)
         except schema.LookError as exc:
-            self.report({'ERROR'}, f"Preset failed validation: {exc}")
+            self.report({'ERROR'}, f"The preset is not valid: {exc}")
             return {'CANCELLED'}
 
         directory = user_looks_dir(create=True)
         if not directory:
-            self.report({'ERROR'}, "Extension user directory unavailable")
+            self.report({'ERROR'}, "CineKit cannot open the user folder of "
+                                   "the extension.")
             return {'CANCELLED'}
         path = os.path.join(directory, f"{look_id}.json")
-        utils.dump_json(path, data)
+        try:
+            utils.dump_json(path, data)
+        except OSError as exc:
+            self.report({'ERROR'}, f"CineKit could not write the preset: "
+                                   f"{exc}")
+            return {'CANCELLED'}
         reload_registry()
         self.report({'INFO'}, f"Saved custom look to {path}")
         return {'FINISHED'}
 
 
+def custom_slug(name):
+    """An ASCII id part for a custom look name.
+
+    Blender enum ids and file names work best with ASCII. A name with no
+    ASCII letters or digits (for example a Persian name) gets a short hash.
+    """
+    slug = "".join(c if c.isascii() and c.isalnum() else "_"
+                   for c in name.lower()).strip("_")
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    if not slug:
+        slug = f"{zlib.crc32(name.encode('utf-8')):08x}"
+    return slug
+
+
 class CK_OT_looks_reload(bpy.types.Operator):
     bl_idname = "cinekit.looks_reload"
     bl_label = "Reload Look Presets"
-    bl_description = "Re-scan built-in and user look preset JSON files"
+    bl_description = "Read the built-in and the user look presets again"
     bl_options = {'REGISTER'}
 
     def execute(self, context):
@@ -137,8 +159,8 @@ class CK_OT_looks_reload(bpy.types.Operator):
         errors = load_errors()
         if errors:
             self.report({'WARNING'},
-                        f"{len(errors)} preset(s) failed validation — see "
-                        "the system console")
+                        f"{len(errors)} preset(s) are not valid. Open the "
+                        "system console to see the errors.")
         return {'FINISHED'}
 
 

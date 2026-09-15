@@ -11,16 +11,45 @@ import math
 # Zeiss convention: circle of confusion = sensor diagonal / 1500.
 COC_DIVISOR = 1500.0
 
-# Reflected-light meter constant (ISO 2720). Average scene luminance for a
-# "correct" exposure at EV100 is L = K/100 * 2^EV100 with K = 12.5 cd/m².
-METER_K = 12.5
-
 # Blender's scene-referred middle grey (Filmic/AgX pivot).
 MIDDLE_GREY = 0.18
 
-# Scene exposure (in stops) that maps a metered scene to middle grey:
-# 2^exposure * (K/100 * 2^EV) = 0.18  =>  exposure = log2(18/K) - EV.
-EXPOSURE_CALIBRATION = math.log2(MIDDLE_GREY * 100.0 / METER_K)  # ~0.526
+# SI luminous efficacy. CineKit reads 1 W/m² of Blender irradiance as
+# 683 lux. A sun lamp with a strength of 1.0 therefore gives 683 lux.
+LUMINOUS_EFFICACY = 683.0
+
+# Incident-light meter constant for a flat receptor (ISO 2720), in lux.
+# At ISO 100: 2^EV100 = illuminance / 2.5.
+INCIDENT_C = 250.0
+
+# Calibration, measured in Blender 5.2 with Cycles and EEVEE:
+#   A Lambert surface with albedo a under irradiance E renders a * E / pi.
+#   The incident meter says  2^EV100 = 683 * E / 2.5.
+#   Middle grey must render 0.18:  2^exposure * 0.18 * E / pi = 0.18.
+#   So  exposure = log2(683 * pi / 2.5) - EV100.
+# With this value, a grey card lit to any EV renders exactly 0.18 when the
+# camera is set to that EV. Default camera settings (f/2.8, 1/50 s,
+# ISO 100 = EV100 8.6) expose a scene lit by a strength-1 sun correctly.
+EXPOSURE_CALIBRATION = math.log2(
+    LUMINOUS_EFFICACY * math.pi / (INCIDENT_C / 100.0))  # ~9.745
+
+
+def srgb_to_linear(value):
+    """Decode one sRGB display value (0-1) to scene-linear.
+
+    Look presets give video levels in display terms (16/255, 235/255).
+    The compositor works in scene-linear, so the engine converts them.
+    """
+    if value <= 0.04045:
+        return value / 12.92
+    return ((value + 0.055) / 1.055) ** 2.4
+
+
+def ev100_for_illuminance(lux):
+    """Incident-meter EV100 for an illuminance in lux."""
+    if lux <= 0:
+        raise ValueError("illuminance must be positive")
+    return math.log2(lux * 100.0 / INCIDENT_C)
 
 
 def coc_mm(sensor_width_mm, sensor_height_mm):

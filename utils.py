@@ -54,19 +54,28 @@ def require_editable(id_block, what="data"):
 
 
 # ---------------------------------------------------------------- collections
-def ck_collection(scene):
-    """Return the scene CineKit collection. Create and tag it if
-    needed."""
+def find_ck_collection(scene):
+    """Return the CineKit collection of this scene, or None."""
     for child in scene.collection.children:
-        if child.get(K.TAG):
+        if str(child.get(K.TAG, "")).startswith("coll_"):
             return child
-    coll = bpy.data.collections.get(K.COLLECTION_NAME)
-    if coll is None or not coll.get(K.TAG):
-        coll = bpy.data.collections.new(K.COLLECTION_NAME)
-        coll[K.TAG] = new_id("coll_")
-        coll.color_tag = 'COLOR_05'
-    if scene.collection.children.find(coll.name) == -1:
-        scene.collection.children.link(coll)
+    return None
+
+
+def ck_collection(scene):
+    """Return the CineKit collection of this scene. Create it if needed.
+
+    Each scene gets its own collection. An older version looked the
+    collection up by name, so a second scene showed the rig helpers of the
+    first scene. Blender adds a number suffix to the name of each new one.
+    """
+    found = find_ck_collection(scene)
+    if found is not None:
+        return found
+    coll = bpy.data.collections.new(K.COLLECTION_NAME)
+    coll[K.TAG] = new_id("coll_")
+    coll.color_tag = 'COLOR_05'
+    scene.collection.children.link(coll)
     return coll
 
 
@@ -98,6 +107,17 @@ def new_empty(scene, name, display='PLAIN_AXES', size=0.5, sub=None):
     return obj
 
 
+def ensure_node_tree(id_block):
+    """Return the node tree of a material, world or light.
+
+    Blender 5.x creates these node trees itself, and the use_nodes switch
+    is deprecated. Older versions create the tree when use_nodes turns on.
+    """
+    if id_block.node_tree is None:
+        id_block.use_nodes = True
+    return id_block.node_tree
+
+
 def find_tagged(pool, key, value=None):
     """All items in pool carrying custom-prop `key` (== value if given)."""
     out = []
@@ -114,11 +134,16 @@ def find_tagged(pool, key, value=None):
 def add_driver(id_block, path, expression, variables=(), index=-1):
     """Create a scripted driver with clearly named variables.
 
-    variables: iterable of (name, id, data_path) or
-               (name, 'LOC_DIFF', obj_a, obj_b).
-    Only built-in driver namespace ('frame', math functions) is used in
-    expressions, so drivers keep evaluating even with the add-on disabled.
-    Raises CKError on linked data.
+    Each variable spec is one of:
+      (name, id, data_path)                   object property
+      (name, id, data_path, id_type)          property of a non-object ID,
+                                              for example id_type 'SCENE'
+      (name, 'LOC_DIFF', obj_a, obj_b)        distance between two objects
+      (name, 'TRANSFORMS', obj, channel)      local transform channel, for
+                                              example 'LOC_X' or 'ROT_Z'
+    Expressions use only the built-in driver namespace ('frame' and the
+    math functions). Blender then evaluates them as simple expressions, so
+    they work when Python auto-run is off. Raises CKError on linked data.
     """
     require_editable(id_block, "Driver target")
     try:
@@ -128,8 +153,8 @@ def add_driver(id_block, path, expression, variables=(), index=-1):
         raise CKError(f"Cannot add driver on '{path}': {exc}") from exc
     drv = fcu.driver
     drv.type = 'SCRIPTED'
-    for var in drv.variables:
-        drv.variables.remove(var)
+    while drv.variables:        # removal while iterating skips entries
+        drv.variables.remove(drv.variables[0])
     for spec in variables:
         v = drv.variables.new()
         v.name = spec[0]
@@ -137,8 +162,15 @@ def add_driver(id_block, path, expression, variables=(), index=-1):
             v.type = 'LOC_DIFF'
             v.targets[0].id = spec[2]
             v.targets[1].id = spec[3]
+        elif spec[1] == 'TRANSFORMS':
+            v.type = 'TRANSFORMS'
+            v.targets[0].id = spec[2]
+            v.targets[0].transform_type = spec[3]
+            v.targets[0].transform_space = 'LOCAL_SPACE'
         else:
             v.type = 'SINGLE_PROP'
+            if len(spec) > 3:
+                v.targets[0].id_type = spec[3]
             v.targets[0].id = spec[1]
             v.targets[0].data_path = spec[2]
     drv.expression = expression
@@ -166,7 +198,8 @@ def action_fcurve_factory(action, id_holder):
     if hasattr(action, "fcurves"):  # 4.x legacy API
         return lambda path, index: action.fcurves.new(data_path=path,
                                                       index=index)
-    slot = action.slots.new(id_type='OBJECT', name=id_holder.name)
+    id_type = getattr(id_holder, "id_type", 'OBJECT')  # OBJECT, LIGHT, ...
+    slot = action.slots.new(id_type=id_type, name=id_holder.name)
     layer = action.layers.new("CineKit")
     strip = layer.strips.new(type='KEYFRAME')
     bag = strip.channelbag(slot, ensure=True)

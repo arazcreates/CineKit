@@ -15,10 +15,16 @@ from . import lighting, rig, utils
 def _linked_warning(layout, id_block, what):
     if utils.is_linked(id_block):
         col = layout.column()
-        col.label(text=f"{what} is linked from a library", icon='LINKED')
-        col.label(text="Make it local to edit CineKit settings")
+        col.label(text=f"{what} comes from a linked library", icon='LINKED')
+        col.label(text="Make it local to edit the CineKit settings")
         return True
     return False
+
+
+def _look_name(look_id):
+    from . import looks
+    look = looks.get(look_id)
+    return look["name"] if look else look_id
 
 
 def _draw_physical(layout, context, cam_data):
@@ -32,6 +38,9 @@ def _draw_physical(layout, context, cam_data):
         return
     col = layout.column(align=True)
     col.prop(ck, "lens_preset")
+    if utils.fetch_state(cam_data, K.PREV_LOOK_CAMERA) is not None:
+        col.label(text="The active look changes the sensor and the lens",
+                  icon='SHADERFX')
     col.separator()
     col.prop(ck, "iso")
     col.prop(ck, "aperture", text="Aperture f/")
@@ -50,8 +59,7 @@ def _draw_physical(layout, context, cam_data):
     is_exposure_cam = (scene.camera is not None
                        and scene.camera.data == cam_data)
     if not is_exposure_cam:
-        col.label(text="Not the active camera — exposure follows the "
-                       "active one", icon='INFO')
+        col.label(text="The active camera sets the exposure", icon='INFO')
     col.prop(ck, "drive_motion_blur")
 
     box = layout.box()
@@ -59,9 +67,6 @@ def _draw_physical(layout, context, cam_data):
     if ck.wb_enabled:
         box.prop(ck, "wb_temperature")
         box.prop(ck, "wb_tint")
-        if not hasattr(scene.view_settings, "white_balance_temperature"):
-            box.label(text="4.2: WB via compositor — enable the Viewport "
-                           "Compositor to preview", icon='INFO')
     row = layout.row(align=True)
     row.operator("cinekit.auto_expose", icon='LIGHT_HEMI')
     row.operator("cinekit.release_exposure", text="", icon='LOOP_BACK')
@@ -81,7 +86,8 @@ class VIEW3D_PT_cinekit(bpy.types.Panel):
     def draw(self, context):
         ck = context.scene.cinekit
         row = self.layout.row(align=True)
-        row.label(text=f"Look: {ck.active_look or '—'}", icon='SHADERFX')
+        look = _look_name(ck.active_look) if ck.active_look else "None"
+        row.label(text=f"Look: {look}", icon='SHADERFX')
         row.prop(ck, "overlay_enabled", text="", icon='OVERLAY')
 
 
@@ -147,6 +153,15 @@ class VIEW3D_PT_ck_shots(_ChildPanel, bpy.types.Panel):
             row.operator("cinekit.shot_set_range", text="Set Range",
                          icon='PREVIEW_RANGE')
         layout.prop(ck, "auto_switch_shot_look")
+        if (ck.shots and ck.auto_switch_shot_look
+                and not scene.render.use_lock_interface):
+            # The frame handler changes cameras and looks during a render.
+            warn = layout.column(align=True)
+            warn.alert = True
+            warn.label(text="Shots change data during renders",
+                       icon='ERROR')
+            warn.prop(scene.render, "use_lock_interface",
+                      text="Lock Interface to Prevent Crashes")
         row = layout.row(align=True)
         row.operator("cinekit.shots_sync_markers", icon='MARKER_HLT')
         layout.operator("cinekit.batch_render", icon='RENDER_ANIMATION')
@@ -202,16 +217,12 @@ class VIEW3D_PT_ck_rigs(_ChildPanel, bpy.types.Panel):
 
         box = layout.box()
         rig_type = root.get(K.TAG_RIG, "?")
-        box.label(text=f"Rig Settings — {rig_type.title()}",
+        box.label(text=f"Rig Settings: {rig_type.title()}",
                   icon='OUTLINER_OB_ARMATURE')
-        rig_id = root.get("cinekit_rig_uid", "")
         if rig_type == K.RIG_DOLLY:
             box.prop(root, '["ck_position"]', text="Position", slider=True)
             box.prop(root, '["ck_track"]', text="Track Aim", slider=True)
-            carrier = next(
-                (o for o in bpy.data.objects
-                 if o.get(K.TAG_RIG_MEMBER) == rig_id
-                 and "Carrier" in o.name), None)
+            carrier = rig.find_member(root, "Carrier")
             if carrier:
                 con = carrier.constraints.get("CK Follow Path")
                 if con:
@@ -252,9 +263,9 @@ class VIEW3D_PT_ck_focus(_ChildPanel, bpy.types.Panel):
         if cam_obj is None or cam_obj.type != 'CAMERA':
             return
         cam = cam_obj.data
-        if not cam.dof.use_dof or not cam.cinekit.enabled:
-            layout.label(text="Enable Physical Camera + DOF for the "
-                              "readout", icon='INFO')
+        if not cam.dof.use_dof:
+            layout.label(text="Turn on Depth of Field on the camera to "
+                              "see the readout", icon='INFO')
             return
         try:
             h, near, far, total = rig.dof_readout(cam, scene)
@@ -305,20 +316,15 @@ class VIEW3D_PT_ck_lighting(_ChildPanel, bpy.types.Panel):
 
         box = layout.box()
         box.label(text="Gobos", icon='TEXTURE')
-        is_cycles = scene.render.engine == K.CYCLES
-        if not is_cycles:
-            box.label(text="EEVEE: gobo uses a shadow plane fallback",
+        if scene.render.engine != K.CYCLES:
+            box.label(text="EEVEE uses a shadow plane for the gobo",
                       icon='INFO')
         row = box.row(align=True)
         row.operator("cinekit.gobo_add", icon='ADD')
         row.operator("cinekit.gobo_remove", text="", icon='X')
 
         box = layout.box()
-        box.label(text="Light Linking (Cycles only)", icon='LINKED')
-        if not is_cycles:
-            box.label(text="Switch to Cycles to use light linking",
-                      icon='INFO')
-            return
+        box.label(text="Light Linking", icon='LINKED')
         obj = context.active_object
         if obj is None or obj.type != 'LIGHT':
             box.label(text="Select a light", icon='INFO')
@@ -347,7 +353,9 @@ def _draw_look_params(layout, scene):
     layout.prop(ck, "look_intensity", slider=True)
     for param in ck.look_params:
         layout.prop(param, "value", text=param.label, slider=True)
-    if ck.active_look == "security_cam":
+    from . import looks
+    look = looks.get(ck.active_look)
+    if look and any(entry["type"] == "timestamp" for entry in look["chain"]):
         layout.prop(ck, "security_timestamp")
 
 
@@ -359,7 +367,7 @@ class VIEW3D_PT_ck_looks(_ChildPanel, bpy.types.Panel):
         scene = context.scene
         ck = scene.cinekit
         layout.operator_menu_enum("cinekit.look_apply", "look",
-                                  text=(f"Look: {ck.active_look}"
+                                  text=(f"Look: {_look_name(ck.active_look)}"
                                         if ck.active_look else
                                         "Apply Look…"),
                                   icon='SHADERFX')
@@ -368,10 +376,11 @@ class VIEW3D_PT_ck_looks(_ChildPanel, bpy.types.Panel):
             row = layout.row(align=True)
             row.operator("cinekit.look_save_custom", icon='FILE_TICK')
             row.operator("cinekit.look_remove", text="", icon='X')
-            layout.label(text="Compositor layer: enable the Viewport "
-                              "Compositor to preview", icon='INFO')
-            layout.label(text="Camera layer (crop, DOF) is live in any "
-                              "viewport", icon='CHECKMARK')
+            col = layout.column(align=True)
+            col.label(text="Image effects: turn on the Viewport "
+                           "Compositor to see them", icon='INFO')
+            col.label(text="Sensor and depth of field show in every "
+                           "viewport", icon='CHECKMARK')
         layout.operator("cinekit.looks_reload", icon='FILE_REFRESH')
 
 
@@ -414,7 +423,7 @@ class NODE_PT_cinekit_look(bpy.types.Panel):
             layout.operator_menu_enum("cinekit.look_apply", "look",
                                       text="Apply Look…")
             return
-        layout.label(text=ck.active_look, icon='SHADERFX')
+        layout.label(text=_look_name(ck.active_look), icon='SHADERFX')
         _draw_look_params(layout, scene)
         layout.operator("cinekit.look_remove", icon='X')
 

@@ -232,10 +232,10 @@ class CK_OT_shot_set_range(bpy.types.Operator):
 class CK_OT_shots_sync_markers(bpy.types.Operator):
     bl_idname = "cinekit.shots_sync_markers"
     bl_label = "Sync Markers"
-    bl_description = ("Rebuild CineKit timeline markers (with bound cameras) "
-                      "from the shot list. Only markers named "
-                      f"'{K.MARKER_PREFIX}…' are touched — user markers are "
-                      "never removed")
+    bl_description = ("Build the CineKit timeline markers again from the "
+                      "shot list, with their cameras. CineKit changes only "
+                      f"markers whose names start with '{K.MARKER_PREFIX}'. "
+                      "Your own markers stay")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod

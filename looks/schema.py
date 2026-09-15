@@ -50,6 +50,8 @@ ARTIFACTS = {
     },
     "levels": {
         "socket": "Levels",
+        # Video levels in display terms (16/255 and 235/255). The engine
+        # converts them to scene-linear values.
         "settings": {"black": (0.0627, 0.0, 0.3), "white": (0.9216, 0.5, 1.0)},
     },
     "grain": {
@@ -118,7 +120,8 @@ ARTIFACTS = {
 CAMERA_KEYS = {
     "sensor_width": (None, 3.0, 70.0),   # mm; None = leave camera alone
     "aspect": None,                       # one of VALID_ASPECTS
-    "min_fstop": (None, 0.5, 64.0),       # force aperture >= this (deep DOF)
+    "min_fstop": (None, 0.5, 64.0),       # depth-of-field f-stop floor
+                                          # (the exposure keeps its aperture)
     "breathing_scale": (1.0, 0.0, 4.0),
 }
 
@@ -150,7 +153,8 @@ def validate_look(data):
         if not isinstance(data.get(key), str) or not data.get(key):
             errors.append(f"'{key}' is required and must be a non-empty string")
     if "id" in data and isinstance(data["id"], str):
-        if not all(c.isalnum() or c in "_-" for c in data["id"]):
+        if not all(c.isascii() and (c.isalnum() or c in "_-")
+                   for c in data["id"]):
             errors.append(f"id '{data['id']}' may only contain [a-zA-Z0-9_-]")
 
     cam = data.get("camera", {})

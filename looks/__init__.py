@@ -15,6 +15,11 @@ except ImportError:  # pure-Python test environment
 
 from . import schema
 
+try:
+    from .. import stable_enum
+except ImportError:  # the pure-Python tests import this package on its own
+    import stable_enum
+
 _registry = {}     # id -> normalized look dict
 _errors = []       # (source_path, message)
 # EnumProperty items callbacks must return strings we keep alive.
@@ -78,12 +83,27 @@ def load_errors():
     return list(_errors)
 
 
-def enum_items(_self=None, _context=None):
-    """Items callback for EnumProperties, with a leading 'None' entry."""
+def _display_order():
+    return sorted(_registry.items(), key=lambda kv: kv[1]["name"])
+
+
+def legacy_ids():
+    """The item order that older CineKit versions stored as positions."""
     if not _registry:
         reload_registry()
-    _enum_cache.clear()
-    _enum_cache.append(("NONE", "None", "No look"))
-    for lid, look in sorted(_registry.items(), key=lambda kv: kv[1]["name"]):
-        _enum_cache.append((lid, look["name"], look["description"]))
+    return [stable_enum.NONE_ID] + [lid for lid, _look in _display_order()]
+
+
+def enum_items(_self=None, _context=None):
+    """Items callback for EnumProperties, with a leading 'None' entry.
+
+    Each item has a stable number, so a new custom look does not change
+    the look that a shot already uses.
+    """
+    if not _registry:
+        reload_registry()
+    entries = [(stable_enum.NONE_ID, "None", "No look")]
+    entries += [(lid, look["name"], look["description"])
+                for lid, look in _display_order()]
+    _enum_cache[:] = stable_enum.numbered_items(entries)
     return _enum_cache

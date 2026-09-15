@@ -26,8 +26,11 @@ def _lens_preset_update(self, context):
     if utils.updates_suppressed():
         return
     from . import rig
-    rig.apply_lens_preset(self.id_data)
-    rig.on_camera_settings_changed(self.id_data, context.scene)
+    from .looks import engine
+    cam = self.id_data
+    engine.edit_base_camera(context.scene, cam,
+                            lambda: rig.apply_lens_preset(cam))
+    rig.on_camera_settings_changed(cam, context.scene)
 
 
 def _breathing_update(self, context):
@@ -58,7 +61,17 @@ def _param_update(self, context):
 
 def _overlay_update(self, context):
     from . import overlay
-    overlay.set_enabled(self.overlay_enabled)
+    # One draw handler serves every scene. Keep it while any scene uses it.
+    overlay.set_enabled(any(getattr(s, "cinekit", None)
+                            and s.cinekit.overlay_enabled
+                            for s in bpy.data.scenes))
+
+
+def _timestamp_update(self, context):
+    if utils.updates_suppressed():
+        return
+    from .looks import engine
+    engine.refresh_timestamp(self.id_data)
 
 
 def _camera_object_poll(self, obj):
@@ -76,24 +89,25 @@ class CK_CameraSettings(bpy.types.PropertyGroup):
 
     enabled: BoolProperty(
         name="Physical Camera",
-        description="Drive this camera with real-world exposure controls. "
-                    "When it is the scene's active camera it owns scene "
-                    "exposure and motion blur",
+        description="Control this camera with real exposure settings. When "
+                    "it is the active camera, it sets the scene exposure "
+                    "and the motion blur",
         default=False, update=_physical_update)
     iso: IntProperty(
         name="ISO", description="Sensor sensitivity",
         default=100, min=25, max=204800, update=_physical_update)
     aperture: FloatProperty(
-        name="Aperture", description="F-stop. Drives depth of field and "
-                                     "exposure",
+        name="Aperture", description="F-stop. It sets the depth of field "
+                                     "and the exposure",
         default=2.8, min=0.5, max=64.0, precision=1, update=_physical_update)
     shutter_mode: EnumProperty(
         name="Shutter Mode",
-        items=(('SPEED', "Speed 1/x", "Shutter as 1/x seconds"),
-               ('ANGLE', "Angle", "Shutter as angle (film convention: 180°)")),
+        items=(('SPEED', "Speed 1/x", "Set the shutter as 1/x seconds"),
+               ('ANGLE', "Angle", "Set the shutter as an angle. Film "
+                                  "cameras usually use 180°")),
         default='SPEED', update=_physical_update)
     shutter_speed: IntProperty(
-        name="Shutter 1/", description="Shutter speed denominator (1/x s)",
+        name="Shutter 1/", description="Shutter speed as 1/x seconds",
         default=50, min=1, max=8000, update=_physical_update)
     shutter_angle: FloatProperty(
         name="Shutter Angle", description="Shutter angle in degrees",
@@ -103,40 +117,42 @@ class CK_CameraSettings(bpy.types.PropertyGroup):
         default=0.0, min=-5.0, max=5.0, update=_physical_update)
     drive_motion_blur: BoolProperty(
         name="Drive Motion Blur",
-        description="Set render motion-blur shutter from this camera's "
-                    "shutter when active", default=True,
-        update=_physical_update)
+        description="Set the motion blur shutter of the render from the "
+                    "shutter of this camera while it is active",
+        default=True, update=_physical_update)
     wb_enabled: BoolProperty(
         name="White Balance",
-        description="Apply temperature/tint. Uses native view-transform white "
-                    "balance on Blender 4.3+, else a compositor gain node "
-                    "(enable the Viewport Compositor to preview it live)",
+        description="Set the white balance from the temperature and the "
+                    "tint. CineKit uses the white balance of the view "
+                    "transform, so the result shows in every viewport",
         default=False, update=_physical_update)
     wb_temperature: IntProperty(
-        name="Temperature", description="Scene illuminant temperature in "
-                                        "Kelvin (whites shot at this "
-                                        "temperature come out neutral)",
+        name="Temperature", description="Color temperature of the scene "
+                                        "light in kelvin. A white surface "
+                                        "under light of this temperature "
+                                        "shows as white",
         default=6500, min=1800, max=12000, update=_physical_update)
     wb_tint: FloatProperty(
-        name="Tint", description="Green (-) to magenta (+) shift",
+        name="Tint", description="Shift to green (-) or to magenta (+)",
         default=0.0, min=-1.0, max=1.0, update=_physical_update)
     lens_preset: EnumProperty(
-        name="Lens", description="JSON-backed lens preset (add your own in "
-                                 "the add-on preferences)",
+        name="Lens", description="Lens preset. Add your own lenses in the "
+                                 "add-on preferences",
         items=lenses.enum_items, update=_lens_preset_update)
     focus_breathing: BoolProperty(
         name="Focus Breathing",
-        description="Slightly shift focal length as focus distance changes "
-                    "(amount from the lens preset). Adds a driver on the "
-                    "focal length", default=False, update=_breathing_update)
+        description="Change the focal length a little when the focus "
+                    "distance changes. The lens preset sets the amount. "
+                    "CineKit adds a driver on the focal length",
+        default=False, update=_breathing_update)
     breathing_amount: FloatProperty(
         name="Breathing Amount",
         description="Breathing strength. The lens preset sets this value",
         default=0.1, min=0.0, max=1.0, update=_breathing_update)
     look: StringProperty(
         name="Camera Look",
-        description="Default look id used when a shot with this camera has "
-                    "no explicit look", default="")
+        description="Look id that a new shot with this camera gets",
+        default="")
 
 
 # --------------------------------------------------------------------- shots
@@ -161,7 +177,7 @@ class CK_Shot(bpy.types.PropertyGroup):
         name="Ease",
         items=(('LINEAR', "Linear", "Constant-speed pull"),
                ('SMOOTH', "Smooth", "Ease in and out"),
-               ('SNAP', "Snap", "Hold then jump — whip focus")),
+               ('SNAP', "Snap", "Hold, then jump. This is a whip focus")),
         default='SMOOTH')
 
 
@@ -174,7 +190,8 @@ class CK_LookParam(bpy.types.PropertyGroup):
     vmin: FloatProperty(default=0.0)
     vmax: FloatProperty(default=2.0)
     value: FloatProperty(
-        name="Value", description="Artifact strength (× master intensity)",
+        name="Value", description="Effect strength. The master intensity "
+                                  "multiplies it",
         min=0.0, max=2.0, soft_max=1.0, update=_param_update)
 
 
@@ -183,30 +200,30 @@ class CK_SceneSettings(bpy.types.PropertyGroup):
     shot_index: IntProperty(name="Active Shot", default=-1)
     auto_switch_shot_look: BoolProperty(
         name="Auto-Switch Looks",
-        description="Apply each shot's look when the playhead enters its "
-                    "frame range (cheap frame-change check)", default=True)
+        description="Apply the look of each shot when the playhead enters "
+                    "the frame range of the shot", default=True)
     active_look: StringProperty(
-        name="Active Look", description="Currently applied look id",
+        name="Active Look", description="Id of the look that is applied",
         default="")
     look_intensity: FloatProperty(
-        name="Intensity", description="Master fade for the whole look",
+        name="Intensity", description="Master strength of the whole look",
         default=1.0, min=0.0, max=1.0, update=_intensity_update)
     look_params: CollectionProperty(type=CK_LookParam)
     overlay_enabled: BoolProperty(
         name="Shot Overlay",
-        description="Viewport text overlay: shot, camera, lens, f-stop, "
-                    "frame-in-shot", default=False, update=_overlay_update)
+        description="Show the shot, camera, lens, f-stop and frame in shot "
+                    "as text in the viewport",
+        default=False, update=_overlay_update)
     rig_advanced_mode: BoolProperty(
         name="Advanced Mode",
-        description="Show a customization dialog when creating a rig, and "
-                    "a Rig Points panel to select and move rig points "
-                    "(carrier, aim, path, base) directly in the viewport",
+        description="Show a settings dialog when you create a rig, and a "
+                    "Rig Points panel to select and move the rig points "
+                    "(carrier, aim, path, base) in the viewport",
         default=False)
     security_timestamp: StringProperty(
         name="Timestamp Text",
-        description="Burned-in text for the Security Cam look "
-                    "(re-apply the look after changing)",
-        default="CAM 01  06.07.2026 14:32")
+        description="Text that the Security Cam look burns into the image",
+        default="CAM 01  06.07.2026 14:32", update=_timestamp_update)
 
 
 # -------------------------------------------------------------------- lights

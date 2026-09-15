@@ -86,6 +86,45 @@ class TestExposure(unittest.TestCase):
             optics.scene_exposure_for_ev100(10.0, 1.5)
             - optics.scene_exposure_for_ev100(10.0), 1.5)
 
+    def test_grey_card_renders_middle_grey(self):
+        # Blender renders a Lambert card with albedo a under irradiance E
+        # (W/m²) as a * E / pi. At the metered EV the card must show 0.18.
+        for irradiance in (0.5, 1.0, 3.0, 40.0):
+            lux = irradiance * optics.LUMINOUS_EFFICACY
+            ev = optics.ev100_for_illuminance(lux)
+            exposure = optics.scene_exposure_for_ev100(ev)
+            pixel = optics.MIDDLE_GREY * irradiance / math.pi
+            self.assertAlmostEqual(pixel * 2.0 ** exposure,
+                                   optics.MIDDLE_GREY, places=9)
+
+    def test_default_camera_exposes_strength_one_sun(self):
+        # f/2.8, 1/50 s, ISO 100 under a strength-1 sun: within 1.2 stops
+        # of the ideal exposure.
+        ev_camera = optics.ev100(2.8, 1.0 / 50.0, 100)
+        ev_scene = optics.ev100_for_illuminance(optics.LUMINOUS_EFFICACY)
+        self.assertLess(abs(ev_camera - ev_scene), 1.2)
+
+    def test_illuminance_rejects_nonpositive(self):
+        with self.assertRaises(ValueError):
+            optics.ev100_for_illuminance(0.0)
+
+
+class TestTransfer(unittest.TestCase):
+    def test_endpoints(self):
+        self.assertAlmostEqual(optics.srgb_to_linear(0.0), 0.0)
+        self.assertAlmostEqual(optics.srgb_to_linear(1.0), 1.0)
+
+    def test_video_levels(self):
+        # 16/255 and 235/255 in display terms.
+        self.assertAlmostEqual(optics.srgb_to_linear(16 / 255), 0.00518,
+                               places=4)
+        self.assertAlmostEqual(optics.srgb_to_linear(235 / 255), 0.83077,
+                               places=4)
+
+    def test_monotonic(self):
+        values = [optics.srgb_to_linear(i / 100) for i in range(101)]
+        self.assertEqual(values, sorted(values))
+
 
 class TestShutter(unittest.TestCase):
     def test_speed_mode(self):

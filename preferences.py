@@ -19,8 +19,8 @@ def get_prefs():
 class CK_OT_lens_add_user(bpy.types.Operator):
     bl_idname = "cinekit.lens_add_user"
     bl_label = "Add User Lens"
-    bl_description = ("Save this lens to your user lens JSON "
-                      "(extension preferences directory)")
+    bl_description = ("Save this lens as a user preset. CineKit writes it to "
+                      "the user folder of the extension")
     bl_options = {'REGISTER'}
 
     def execute(self, context):
@@ -34,9 +34,9 @@ class CK_OT_lens_add_user(bpy.types.Operator):
                                  prefs.new_lens_aperture,
                                  prefs.new_lens_breathing)
         except (RuntimeError, OSError) as exc:
-            self.report({'ERROR'}, f"Could not save lens: {exc}")
+            self.report({'ERROR'}, f"CineKit could not save the lens: {exc}")
             return {'CANCELLED'}
-        self.report({'INFO'}, f"Lens '{name}' added")
+        self.report({'INFO'}, f"CineKit added the lens '{name}'.")
         return {'FINISHED'}
 
 
@@ -45,8 +45,8 @@ class CineKitPreferences(bpy.types.AddonPreferences):
 
     target_grey: bpy.props.FloatProperty(
         name="Auto-Exposure Target",
-        description="Scene-referred middle grey the auto-exposure assist "
-                    "aims for (0.18 is standard)",
+        description="Middle grey value that Auto Expose aims for. The "
+                    "standard value is 0.18",
         default=0.18, min=0.02, max=0.8)
     new_lens_name: bpy.props.StringProperty(name="Name",
                                             default="My 40mm f/2")

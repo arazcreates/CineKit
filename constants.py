@@ -10,8 +10,6 @@ TAG_RIG_MEMBER = "cinekit_rig_member"  # on rig members: rig root name
 TAG_LOOK = "cinekit_look"          # on look node groups: look id
 TAG_LIGHT_SETUP = "cinekit_light_setup"  # on setup collections: setup id
 TAG_FOCUS = "cinekit_focus"        # on focus target empties
-TAG_POINT = "cinekit_point_role"      # on editable rig points: role label
-TAG_POINT_MOVE = "cinekit_point_move"  # on rig points whose location is free
 
 # Keys for stored prior state (JSON strings in ID custom properties).
 PREV_CAMERA_RIG = "cinekit_prerig"        # camera object: matrix + parent before rigging
@@ -21,6 +19,9 @@ PREV_COLOR = "cinekit_prev_color"         # scene: view transform/look before a 
 PREV_COMP = "cinekit_prev_comp"           # scene: compositor links before pipeline insertion
 PREV_RENDER = "cinekit_prev_render"       # scene: resolution before a look aspect change
 BASE_LENS = "cinekit_base_lens"           # camera data: focal length before breathing driver
+PREV_WB = "cinekit_prev_wb"               # scene: native white balance before CK changed it
+LOOK_MIN_FSTOP = "cinekit_look_min_fstop" # camera data: depth-of-field floor from a look
+LOOK_BIAS = "cinekit_look_bias"           # scene: exposure bias of the active look (stops)
 
 COLLECTION_NAME = "CineKit"
 PIPELINE_GROUP = "CK_Pipeline"     # inserted compositor group (WB + look slot)
@@ -38,3 +39,6 @@ RIG_CRANE = "CRANE"
 RIG_HANDHELD = "HANDHELD"
 RIG_ORBIT = "ORBIT"
 RIG_TYPES = (RIG_DOLLY, RIG_CRANE, RIG_HANDHELD, RIG_ORBIT)
+
+TAG_POINT = "cinekit_point_role"      # on editable rig points: role label
+TAG_POINT_MOVE = "cinekit_point_move"  # on rig points whose location is free

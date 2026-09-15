@@ -74,6 +74,8 @@ class CK_OT_batch_render(bpy.types.Operator):
             "camera": scene.camera.name if scene.camera else "",
             "filepath": scene.render.filepath,
             "look": scene.cinekit.active_look,
+            "intensity": scene.cinekit.look_intensity,
+            "params": [(p.name, p.value) for p in scene.cinekit.look_params],
         }
         self._on_complete = lambda *args: self._flag(done=True)
         self._on_cancel = lambda *args: self._flag(failed=True)
@@ -117,7 +119,7 @@ class CK_OT_batch_render(bpy.types.Operator):
             raise CKError(f"The render did not start for shot '{shot.name}'.")
 
     def modal(self, context, event):
-        if event.type == 'ESC':
+        if event.type == 'ESC' and event.value == 'PRESS':
             self._user_cancel = True
             self.report({'WARNING'},
                         "The batch stops after the current shot. "
@@ -190,8 +192,17 @@ class CK_OT_batch_render(bpy.types.Operator):
             from .looks import engine
             if saved["look"]:
                 engine.apply_look(scene, saved["look"])
+                # Put back the look settings that the user had before.
+                ck = scene.cinekit
+                ck.look_intensity = saved["intensity"]
+                values = dict(saved["params"])
+                for param in ck.look_params:
+                    if param.name in values:
+                        param.value = values[param.name]
             elif scene.cinekit.active_look:
                 engine.remove_look(scene)
+            from . import shots as shots_mod
+            shots_mod.invalidate_cache(scene)
         except Exception as exc:  # never leave state half-restored silently
             print(f"CineKit: batch state restore problem: {exc}")
 

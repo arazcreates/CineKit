@@ -4,11 +4,17 @@
 
 import json
 import os
+import zlib
 
 try:
     import bpy
 except ImportError:
     bpy = None
+
+try:
+    from . import stable_enum
+except ImportError:  # the pure-Python tests import this module on its own
+    import stable_enum
 
 _lenses = {}       # id -> dict(name, focal, max_aperture, breathing)
 _enum_cache = []
@@ -68,32 +74,55 @@ def add_user_lens(name, focal, max_aperture, breathing):
     """Append a lens to the user JSON in the extension prefs dir."""
     path = user_lenses_path(create_dir=True)
     if path is None:
-        raise RuntimeError("extension user directory unavailable")
+        raise RuntimeError("CineKit cannot open the user folder of the "
+                           "extension.")
     data = {"lenses": []}
     if os.path.isfile(path):
+        # Stop on a file that CineKit cannot read. Writing over it would
+        # delete the other user lenses.
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-        except (OSError, ValueError):
-            pass
-    lid = "user_" + "".join(c for c in name.lower() if c.isalnum() or c == "_")
-    data.setdefault("lenses", []).append({
-        "id": lid, "name": name, "focal": focal,
-        "max_aperture": max_aperture, "breathing": breathing,
-    })
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"CineKit cannot read '{path}'. Repair the "
+                               f"file or move it away: {exc}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"'{path}' does not contain a lens list. "
+                               "Repair the file or move it away.")
+    slug = "".join(c for c in name.lower()
+                   if c.isascii() and (c.isalnum() or c == "_"))
+    lid = "user_" + (slug or f"{zlib.crc32(name.encode('utf-8')):08x}")
+    entry = {"id": lid, "name": name, "focal": focal,
+             "max_aperture": max_aperture, "breathing": breathing}
+    entries = [e for e in data.setdefault("lenses", [])
+               if isinstance(e, dict) and e.get("id") != lid]
+    entries.append(entry)       # a lens with the same name replaces the old one
+    data["lenses"] = entries
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2)
     reload_registry()
     return lid
 
 
+def _display_order():
+    return sorted(_lenses.items(), key=lambda kv: kv[1]["focal"])
+
+
+def legacy_ids():
+    """The item order that older CineKit versions stored as positions."""
+    if not _lenses:
+        reload_registry()
+    return [stable_enum.NONE_ID] + [lid for lid, _lens in _display_order()]
+
+
 def enum_items(_self=None, _context=None):
     if not _lenses:
         reload_registry()
-    _enum_cache.clear()
-    _enum_cache.append(("NONE", "Custom", "No preset — free focal length"))
-    for lid, lens in sorted(_lenses.items(), key=lambda kv: kv[1]["focal"]):
+    entries = [(stable_enum.NONE_ID, "Custom",
+                "No preset. Set the focal length yourself")]
+    for lid, lens in _display_order():
         desc = (f"{lens['focal']:g}mm, f/{lens['max_aperture']:g}, "
                 f"breathing {lens['breathing']:.2f}")
-        _enum_cache.append((lid, lens["name"], desc))
+        entries.append((lid, lens["name"], desc))
+    _enum_cache[:] = stable_enum.numbered_items(entries)
     return _enum_cache

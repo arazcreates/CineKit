@@ -13,6 +13,10 @@ from .utils import CKError
 # Track the running picker so load_post can clear stale modal state.
 _picker_running = False
 
+# Blender keeps only a pointer to the strings of dynamic enum items. The
+# module keeps the list, so the strings stay valid.
+_target_cache = []
+
 
 def cancel_stale():
     global _picker_running
@@ -24,9 +28,22 @@ def focus_targets(scene):
 
 
 def _target_items(_self, context):
-    items = [(o.name, o.name, "Focus target") for o in
-             focus_targets(context.scene)]
-    return items or [("", "No focus targets", "")]
+    items = [(o.name, o.name, "Focus target")
+             for o in focus_targets(context.scene)]
+    _target_cache[:] = items or [("NONE", "No focus targets", "")]
+    return _target_cache
+
+
+def _refresh_breathing(cam_data):
+    """The breathing driver reads the focus object or the focus distance.
+    Build it again after the focus source changes."""
+    if not cam_data.cinekit.focus_breathing:
+        return
+    from . import rig
+    try:
+        rig.set_breathing(cam_data)
+    except CKError as exc:
+        print(f"CineKit: could not refresh the breathing driver: {exc}")
 
 
 def _new_focus_target(context, location):
@@ -43,9 +60,9 @@ def _new_focus_target(context, location):
 class CK_OT_focus_pick(bpy.types.Operator):
     bl_idname = "cinekit.focus_pick"
     bl_label = "Focus Picker"
-    bl_description = ("Click a surface to place the focus target and point "
-                      "the active camera's DOF at it. Ctrl-click adds a new "
-                      "target instead of moving the last one. ESC cancels")
+    bl_description = ("Click a surface to move the focus target there, and "
+                      "focus the active camera on it. Ctrl-click adds a new "
+                      "target. Esc cancels")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -63,8 +80,8 @@ class CK_OT_focus_pick(bpy.types.Operator):
         context.window.cursor_modal_set('EYEDROPPER')
         context.window_manager.modal_handler_add(self)
         context.area.header_text_set(
-            "Focus Picker: click a surface (Ctrl-click: new target) — "
-            "ESC/RMB cancels")
+            "Focus Picker: click a surface. Ctrl-click adds a new target. "
+            "Esc or right-click cancels.")
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
@@ -107,15 +124,14 @@ class CK_OT_focus_pick(bpy.types.Operator):
             target = _new_focus_target(context, location)
         else:
             target = targets[-1]
-            target.location = location
+            # World position, so a parented target also lands on the hit.
+            target.matrix_world.translation = location
         cam.dof.use_dof = True
         cam.dof.focus_object = target
         dist = (scene.camera.matrix_world.translation - location).length
         self.report({'INFO'},
                     f"Focus on '{target.name}' at {dist:.2f} m")
-        if cam.cinekit.focus_breathing:
-            from . import rig
-            rig.set_breathing(cam)  # switch driver to object distance
+        _refresh_breathing(cam)  # the driver now reads the object distance
 
     def _exit(self, context, cancelled):
         global _picker_running
@@ -139,9 +155,9 @@ class CK_OT_focus_add_target(bpy.types.Operator):
 class CK_OT_rack_focus(bpy.types.Operator):
     bl_idname = "cinekit.rack_focus"
     bl_label = "Rack Focus"
-    bl_description = ("Keyframe DOF distance from target A to target B over "
-                      "N frames, starting at the current frame. Stores the "
-                      "rack on the active shot")
+    bl_description = ("Keyframe the focus distance from target A to target B "
+                      "over a number of frames, from the current frame. The "
+                      "active shot keeps these settings")
     bl_options = {'REGISTER', 'UNDO'}
 
     target_a: bpy.props.EnumProperty(name="From", items=_target_items)
@@ -151,7 +167,7 @@ class CK_OT_rack_focus(bpy.types.Operator):
         name="Ease",
         items=(('LINEAR', "Linear", "Constant-speed pull"),
                ('SMOOTH', "Smooth", "Ease in and out"),
-               ('SNAP', "Snap", "Hold, then jump (whip focus)")),
+               ('SNAP', "Snap", "Hold, then jump. This is a whip focus")),
         default='SMOOTH')
 
     @classmethod
@@ -195,26 +211,32 @@ class CK_OT_rack_focus(bpy.types.Operator):
         dist_b = (cam_loc - obj_b.matrix_world.translation).length
         cam.dof.use_dof = True
         cam.dof.focus_object = None  # rack drives the distance directly
+        _refresh_breathing(cam)
 
         f0 = scene.frame_current
         f1 = f0 + self.frames
+        interpolation = {'LINEAR': 'LINEAR', 'SMOOTH': 'BEZIER',
+                         'SNAP': 'CONSTANT'}[self.ease]
+        action = cam.animation_data.action if cam.animation_data else None
+        for fcu in utils.action_fcurves(action):
+            if fcu.data_path == "dof.focus_distance":
+                # Keys from an older rack inside the new range would bend
+                # the pull. Remove them.
+                for kp in reversed(list(fcu.keyframe_points)):
+                    if f0 + 0.5 < kp.co.x < f1 - 0.5:
+                        fcu.keyframe_points.remove(kp)
         cam.dof.focus_distance = dist_a
         cam.dof.keyframe_insert("focus_distance", frame=f0)
         cam.dof.focus_distance = dist_b
         cam.dof.keyframe_insert("focus_distance", frame=f1)
 
         action = cam.animation_data.action if cam.animation_data else None
-        if action:
-            for fcu in utils.action_fcurves(action):
-                if fcu.data_path.endswith("focus_distance"):
-                    for kp in fcu.keyframe_points:
-                        if abs(kp.co.x - f0) < 0.5 or abs(kp.co.x - f1) < 0.5:
-                            kp.interpolation = {
-                                'LINEAR': 'LINEAR',
-                                'SMOOTH': 'BEZIER',
-                                'SNAP': 'CONSTANT'}[self.ease]
-                            kp.easing = 'EASE_IN_OUT'
-                    fcu.update()
+        for fcu in utils.action_fcurves(action):
+            if fcu.data_path == "dof.focus_distance":
+                for kp in fcu.keyframe_points:
+                    if abs(kp.co.x - f0) < 0.5 or abs(kp.co.x - f1) < 0.5:
+                        kp.interpolation = interpolation
+                fcu.update()
 
         ck = scene.cinekit
         if 0 <= ck.shot_index < len(ck.shots):
@@ -232,8 +254,8 @@ class CK_OT_rack_focus(bpy.types.Operator):
 class CK_OT_focus_clear_targets(bpy.types.Operator):
     bl_idname = "cinekit.focus_clear_targets"
     bl_label = "Remove Focus Targets"
-    bl_description = ("Delete all CineKit focus target empties in the scene "
-                      "(cameras keep their focus distance)")
+    bl_description = ("Delete all CineKit focus target empties in the scene. "
+                      "The cameras keep their focus distance")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -243,12 +265,15 @@ class CK_OT_focus_clear_targets(bpy.types.Operator):
     def execute(self, context):
         targets = focus_targets(context.scene)
         for obj in bpy.data.objects:
-            if obj.type == 'CAMERA' and obj.data.dof.focus_object in targets:
+            if obj.type != 'CAMERA' or utils.is_linked(obj.data):
+                continue
+            if obj.data.dof.focus_object in targets:
                 dist = (obj.matrix_world.translation -
                         obj.data.dof.focus_object.matrix_world.translation
                         ).length
                 obj.data.dof.focus_object = None
                 obj.data.dof.focus_distance = dist
+                _refresh_breathing(obj.data)
         for target in targets:
             bpy.data.objects.remove(target, do_unlink=True)
         return {'FINISHED'}
