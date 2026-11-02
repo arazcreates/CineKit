@@ -16,6 +16,8 @@ from . import batch, focus, overlay, shots, utils
 
 _msgbus_owner = object()
 _warned_unlocked_render = False
+# scene name -> camera object name at the last frame change
+_last_camera = {}
 
 
 def _unlocked_render(scene):
@@ -28,21 +30,44 @@ def _unlocked_render(scene):
             and not scene.render.use_lock_interface)
 
 
+def _follow_active_camera(scene):
+    """Keep the exposure, the aperture and the lens blur on the active camera.
+
+    A timeline marker can switch the camera during playback and renders,
+    and keyframes can animate the physical settings. Property updates do
+    not run for either, so the frame handler syncs here.
+    """
+    cam = scene.camera
+    if cam is None or cam.type != 'CAMERA':
+        return
+    from . import rig
+    if _last_camera.get(scene.name) != cam.name:
+        _last_camera[scene.name] = cam.name
+        rig.sync_active_camera(scene)
+        return
+    data = cam.data
+    if data.cinekit.enabled and rig.settings_animated(data):
+        rig.on_camera_settings_changed(data, scene)
+
+
 @persistent
 def _on_frame_change(scene, _depsgraph=None):
     global _warned_unlocked_render
-    if batch._active is not None:
-        # The batch render applies each shot itself. A frame handler switch
-        # could pick an overlapping shot in the middle of a render.
-        return
     try:
-        if _unlocked_render(scene) and scene.cinekit.shots \
+        cam = scene.camera
+        physical = (cam is not None and cam.type == 'CAMERA'
+                    and cam.data.cinekit.enabled)
+        if _unlocked_render(scene) and (scene.cinekit.shots or physical) \
                 and not _warned_unlocked_render:
             _warned_unlocked_render = True
-            print("CineKit: the shot list changes looks and cameras during "
-                  "this render. Turn on Render > Lock Interface to prevent "
-                  "a crash.")
-        shots.on_frame_change(scene)
+            print("CineKit: CineKit changes cameras, looks or camera "
+                  "settings during this render. Turn on Render > Lock "
+                  "Interface to prevent a crash.")
+        _follow_active_camera(scene)
+        if batch._active is None:
+            # The batch render applies each shot itself. A shot switch here
+            # could pick an overlapping shot in the middle of a render.
+            shots.on_frame_change(scene)
     except Exception as exc:  # a handler must never break playback
         print(f"CineKit: frame handler error: {exc}")
 
@@ -117,6 +142,7 @@ def _refresh_file_state():
 def _on_load_post(_dummy=None):
     global _warned_unlocked_render
     _warned_unlocked_render = False
+    _last_camera.clear()
     overlay.cleanup()
     batch.cancel_stale()
     focus.cancel_stale()

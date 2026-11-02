@@ -37,12 +37,24 @@ def _breathing_update(self, context):
     if utils.updates_suppressed():
         return
     from . import rig
+    cam = self.id_data
     try:
-        rig.set_breathing(self.id_data)
+        rig.set_breathing(cam)
     except utils.CKError as exc:
         print(f"CineKit: focus breathing refused: {exc}")
         with utils.suppress_updates():
-            self.focus_breathing = False
+            cam.cinekit.focus_breathing = False
+
+
+def _squeeze_update(self, context):
+    if utils.updates_suppressed():
+        return
+    from . import rig
+    from .looks import engine
+    cam = self.id_data
+    engine.edit_base_camera(context.scene, cam,
+                            lambda: rig.apply_squeeze(cam, self.squeeze))
+    rig.on_camera_settings_changed(cam, context.scene)
 
 
 def _intensity_update(self, context):
@@ -79,6 +91,23 @@ def _camera_object_poll(self, obj):
 
 
 # ------------------------------------------------------------------- camera
+class CK_BreathingPoint(bpy.types.PropertyGroup):
+    """One measured point of a focus breathing table."""
+
+    distance: FloatProperty(
+        name="Focus Distance",
+        description="Focus distance on the lens scale, measured from the "
+                    "sensor plane",
+        default=1.0, min=0.01, soft_max=100.0, subtype='DISTANCE',
+        unit='LENGTH', update=_breathing_update)
+    focal: FloatProperty(
+        name="Focal Length",
+        description="Focal length that gives the measured field of view at "
+                    "this focus distance",
+        default=50.0, min=1.0, max=5000.0, subtype='DISTANCE_CAMERA',
+        update=_breathing_update)
+
+
 class CK_CameraSettings(bpy.types.PropertyGroup):
     """Physical camera settings on Camera data.
 
@@ -147,8 +176,117 @@ class CK_CameraSettings(bpy.types.PropertyGroup):
         default=False, update=_breathing_update)
     breathing_amount: FloatProperty(
         name="Breathing Amount",
-        description="Breathing strength. The lens preset sets this value",
-        default=0.1, min=0.0, max=1.0, update=_breathing_update)
+        description="Breathing strength. For the physical model, 1 is a lens "
+                    "that focuses as a whole, 0 is a fully compensated lens, "
+                    "and a negative value widens the view at close focus. "
+                    "The lens preset sets this value",
+        default=0.1, min=-1.0, max=1.0, update=_breathing_update)
+    breathing_model: EnumProperty(
+        name="Breathing Model",
+        items=(('STYLIZED', "Stylized",
+                "A small shift that grows at close focus. This is the model "
+                "of earlier CineKit versions"),
+               ('UNIT', "Physical",
+                "Thin-lens breathing from the focal length and the focus "
+                "distance, scaled by the amount"),
+               ('TABLE', "Measured",
+                "Focal lengths that you measured at focus distances. "
+                "CineKit draws a smooth curve through the points")),
+        default='STYLIZED', update=_breathing_update)
+    breathing_points: CollectionProperty(type=CK_BreathingPoint)
+    breathing_index: IntProperty(name="Active Point", default=0)
+    max_aperture: FloatProperty(
+        name="Widest Aperture",
+        description="Widest f-stop of the lens. Lens softness and the "
+                    "aperture shape count stops from this value",
+        default=1.4, min=0.5, max=32.0, precision=2,
+        update=_physical_update)
+    transmission: FloatProperty(
+        name="Transmission",
+        description="Share of the light that the lens lets through. The "
+                    "T-stop is the f-stop divided by the square root of this "
+                    "value. The exposure uses the T-stop, and the depth of "
+                    "field uses the f-stop",
+        default=1.0, min=0.3, max=1.0, update=_physical_update)
+    nd_stops: FloatProperty(
+        name="ND Filter",
+        description="Neutral density filter in stops. It lowers the "
+                    "exposure and keeps the depth of field",
+        default=0.0, min=0.0, max=15.0, precision=2,
+        update=_physical_update)
+    rolling_shutter: BoolProperty(
+        name="Rolling Shutter",
+        description="Read the sensor line by line from the top, like a CMOS "
+                    "camera. Fast motion then skews. Cycles only",
+        default=False, update=_physical_update)
+    readout_ms: FloatProperty(
+        name="Readout Time",
+        description="Time in milliseconds from the top line to the bottom "
+                    "line. Global shutter: 0. Cinema cameras: about 5 to 15. "
+                    "Mirrorless and phone cameras: about 15 to 40",
+        default=20.0, min=0.0, max=200.0, update=_physical_update)
+    aperture_shape: BoolProperty(
+        name="Aperture Shape",
+        description="Set the bokeh shape from the lens: blade count, blade "
+                    "rotation and anamorphic squeeze. The shape follows the "
+                    "f-stop",
+        default=False, update=_physical_update)
+    blades: IntProperty(
+        name="Blades",
+        description="Number of aperture blades. 0 gives a round aperture",
+        default=9, min=0, max=16, update=_physical_update)
+    blade_rotation: FloatProperty(
+        name="Blade Rotation",
+        description="Rotation of the aperture polygon wide open",
+        default=0.0, subtype='ANGLE', update=_physical_update)
+    blade_rotation_per_stop: FloatProperty(
+        name="Rotation per Stop",
+        description="The aperture polygon turns by this angle for each stop "
+                    "that you close the lens",
+        default=0.0, subtype='ANGLE', update=_physical_update)
+    round_stops: FloatProperty(
+        name="Round Until",
+        description="The aperture stays round up to this many stops closed "
+                    "from wide open. Rounded blades keep the bokeh round for "
+                    "the first stops",
+        default=0.0, min=0.0, max=10.0, update=_physical_update)
+    squeeze: FloatProperty(
+        name="Anamorphic Squeeze",
+        description="Squeeze factor of an anamorphic lens. CineKit widens "
+                    "the horizontal field of view by this factor and makes "
+                    "the bokeh oval. 1 is a spherical lens",
+        default=1.0, min=1.0, max=2.5, update=_squeeze_update)
+    min_focus: FloatProperty(
+        name="Minimum Focus",
+        description="Closest focus distance of the lens, measured from the "
+                    "sensor plane. Breathing stops at this distance. 0 means "
+                    "unknown",
+        default=0.0, min=0.0, soft_max=10.0, subtype='DISTANCE',
+        unit='LENGTH', update=_breathing_update)
+    pupil_offset: FloatProperty(
+        name="Entrance Pupil",
+        description="Distance from the sensor plane to the entrance pupil of "
+                    "the lens. Tripod, pedestal and crane heads turn about "
+                    "the sensor plane, and focus marks start there",
+        default=0.0, min=0.0, soft_max=0.5, subtype='DISTANCE',
+        unit='LENGTH', update=_breathing_update)
+    lens_softness: BoolProperty(
+        name="Lens Softness",
+        description="Blur the image like the lens: aberrations wide open "
+                    "and diffraction when stopped down. CineKit adds a blur "
+                    "to the compositor",
+        default=False, update=_physical_update)
+    softness_um: FloatProperty(
+        name="Softness Wide Open",
+        description="Aberration blur of the lens at its widest aperture, as "
+                    "a Gaussian sigma in micrometers on the sensor. From a "
+                    "lens test: 187.4 divided by MTF50 in line pairs per mm",
+        default=5.0, min=0.0, max=50.0, update=_physical_update)
+    diffraction: BoolProperty(
+        name="Diffraction",
+        description="Add the diffraction blur of the aperture. It grows when "
+                    "you close the aperture",
+        default=True, update=_physical_update)
     look: StringProperty(
         name="Camera Look",
         description="Look id that a new shot with this camera gets",
@@ -238,6 +376,7 @@ class CK_LightSettings(bpy.types.PropertyGroup):
 
 
 CLASSES = (
+    CK_BreathingPoint,
     CK_CameraSettings,
     CK_Shot,
     CK_LookParam,

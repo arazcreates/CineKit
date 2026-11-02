@@ -417,7 +417,8 @@ def _maybe_cleanup_pipeline(scene):
     if node is None:
         return
     ptree = node.node_tree
-    if ptree is not None and _find_node(ptree, "look") is not None:
+    if ptree is not None and (_find_node(ptree, "look") is not None
+                              or _find_node(ptree, _LENS_TAG) is not None):
         return
     wb = tuple(node.inputs["White Balance"].default_value)[:3] \
         if "White Balance" in node.inputs else (1, 1, 1)
@@ -459,6 +460,145 @@ def set_white_balance(scene, gains):
         return
     node = ensure_pipeline(scene)
     node.inputs["White Balance"].default_value = (*gains, 1.0)
+
+
+# ============================================================ lens softness
+# A Gaussian blur before the white balance, sized by drivers from the active
+# camera: diffraction and lens aberrations (optics.lens_blur_sigma_mm).
+_LENS_TAG = "lens_blur"
+_LENS_SIZE_TAG = "lens_blur_size"
+
+
+def _wb_input_a(ptree):
+    """The image input (A) of the white balance mix node."""
+    wb = _find_node(ptree, "wb")
+    if wb is None:
+        return None
+    return wb.inputs[6] if wb.bl_idname == 'ShaderNodeMix' else wb.inputs[1]
+
+
+def _ensure_lens_nodes(ptree):
+    blur = _find_node(ptree, _LENS_TAG)
+    size = _find_node(ptree, _LENS_SIZE_TAG)
+    if blur is not None and size is not None:
+        return blur, size
+    _remove_lens_nodes(ptree)
+    gin = next((n for n in ptree.nodes if n.type == 'GROUP_INPUT'), None)
+    a_in = _wb_input_a(ptree)
+    if gin is None or a_in is None:
+        raise CKError("The CineKit pipeline node group is incomplete. Remove "
+                      "the look, then apply it again.")
+    blur = ptree.nodes.new('CompositorNodeBlur')
+    blur.label = "CK Lens Softness"
+    blur[K.TAG] = _LENS_TAG
+    blur.location = (-300.0, 180.0)
+    _set_first(blur, ["Type"], 'Gaussian')
+    size = _try_new(ptree, 'ShaderNodeCombineXYZ', 'CompositorNodeCombineXYZ')
+    size.label = "CK Lens Blur Radius"
+    size[K.TAG] = _LENS_SIZE_TAG
+    size.location = (-520.0, 260.0)
+    ptree.links.new(size.outputs[0], blur.inputs["Size"])
+    ptree.links.new(gin.outputs["Image"], blur.inputs[0])
+    ptree.links.new(blur.outputs[0], a_in)
+    return blur, size
+
+
+def _remove_lens_nodes(ptree):
+    size = _find_node(ptree, _LENS_SIZE_TAG)
+    if size is not None:
+        anim = ptree.animation_data
+        if anim is not None:
+            prefix = f'nodes["{size.name}"]'
+            for fcu in [f for f in anim.drivers
+                        if f.data_path.startswith(prefix)]:
+                anim.drivers.remove(fcu)
+        ptree.nodes.remove(size)
+    blur = _find_node(ptree, _LENS_TAG)
+    if blur is not None:
+        ptree.nodes.remove(blur)
+        gin = next((n for n in ptree.nodes if n.type == 'GROUP_INPUT'), None)
+        a_in = _wb_input_a(ptree)
+        if gin is not None and a_in is not None:
+            ptree.links.new(gin.outputs["Image"], a_in)
+
+
+# Data paths of the lens blur driver variables (optics.LENS_BLUR_VARIABLES).
+_LENS_BLUR_PATHS = {
+    "n": ('CAMERA', "dof.aperture_fstop"),
+    "a": ('CAMERA', "cinekit.max_aperture"),
+    "s": ('CAMERA', "cinekit.softness_um"),
+    "d": ('CAMERA', "cinekit.diffraction"),
+    "f": ('CAMERA', "lens"),
+    "u": ('CAMERA', "dof.focus_distance"),
+    "w": ('CAMERA', "sensor_width"),
+    "h": ('CAMERA', "sensor_height"),
+    "t": ('CAMERA', "sensor_fit"),
+    "q": ('CAMERA', "cinekit.squeeze"),
+    "x": ('SCENE', "render.resolution_x"),
+    "y": ('SCENE', "render.resolution_y"),
+    "p": ('SCENE', "render.resolution_percentage"),
+    "i": ('SCENE', "render.pixel_aspect_x"),
+    "j": ('SCENE', "render.pixel_aspect_y"),
+}
+
+
+def _lens_blur_variables(scene, cam):
+    out = []
+    for name, _meaning in optics.LENS_BLUR_VARIABLES:
+        id_type, path = _LENS_BLUR_PATHS[name]
+        out.append((name, cam if id_type == 'CAMERA' else scene, path,
+                    id_type))
+    return out
+
+
+def _set_blur_curve(fcu):
+    """Keys that turn the radius 3 * sigma into the blur node radius.
+
+    The Blender blur samples its kernel at whole pixels, so a small radius
+    blurs less than the sigma asks for (optics.blur_node_variance).
+    """
+    table = optics.blur_curve()
+    keys = fcu.keyframe_points
+    keys.clear()
+    keys.add(len(table))
+    for key, (radius, node_radius) in zip(keys, table):
+        key.co = (radius, node_radius)
+        key.interpolation = 'LINEAR'
+    fcu.extrapolation = 'LINEAR'
+    fcu.update()
+
+
+def update_lens_softness(scene):
+    """Add, update or remove the lens softness blur of the scene.
+
+    The blur follows the active camera. A driver path through scene.camera
+    does not update on a camera switch, so CineKit points the driver
+    variables at the new camera here. rig.sync_active_camera calls this.
+    """
+    if utils.is_linked(scene):
+        return
+    cam_obj = scene.camera
+    cam = cam_obj.data if cam_obj is not None and cam_obj.type == 'CAMERA' \
+        else None
+    wanted = (cam is not None and not utils.is_linked(cam)
+              and cam.cinekit.enabled and cam.cinekit.lens_softness)
+    if not wanted:
+        node = _find_pipeline_node(scene)
+        if (node is not None and node.node_tree is not None
+                and _find_node(node.node_tree, _LENS_TAG) is not None):
+            _remove_lens_nodes(node.node_tree)
+            _maybe_cleanup_pipeline(scene)
+        return
+    ptree = ensure_pipeline(scene).node_tree
+    _blur, size = _ensure_lens_nodes(ptree)
+    variables = _lens_blur_variables(scene, cam)
+    for index, horizontal in ((0, True), (1, False)):
+        path = f'nodes["{size.name}"].inputs[{index}].default_value'
+        expression = optics.lens_blur_driver(horizontal)
+        if utils.driver_matches(ptree, path, expression, variables,
+                                optics.blur_curve()):
+            continue
+        _set_blur_curve(utils.add_driver(ptree, path, expression, variables))
 
 
 # ============================================================== look apply
@@ -1224,7 +1364,11 @@ def _bld_chroma_bleed(b, img, s):
     b.link(sep_soft.outputs[1], comb.inputs[1])    # smeared chroma
     b.link(sep_soft.outputs[2], comb.inputs[2])
     b.link(sep_sharp.outputs[3], comb.inputs[3])
-    return b.mix(b.fac("Chroma Bleed", s["strength"]), img, comb.outputs[0])
+    # The chroma of a bright saturated light on the luma of a dark pixel
+    # gives a color below zero. Stop it at black.
+    floored = b.mix(1.0, comb.outputs[0], b.rgb((0.0, 0.0, 0.0)),
+                    blend='LIGHTEN')
+    return b.mix(b.fac("Chroma Bleed", s["strength"]), img, floored)
 
 
 def _bld_luma_noise(b, img, s):
@@ -1323,21 +1467,41 @@ def _bld_levels(b, img, s):
 
 
 def _bld_grain(b, img, s):
+    """Film grain that scales with the light.
+
+    This is the Soft Light formula in another form: a * (1 + g * (1 - a)),
+    where g is the grain around zero. A Soft Light blend cannot stay in the
+    compositor: above 1.0 its a * a term grows much faster than the light,
+    so a pixel at 100 can go to thousands, or far below zero. The bright
+    pixels then show as colored and black specks.
+
+    Here 1 - a uses the light limited to 0..2. Up to 2.0 the result is the
+    same as Soft Light. Above 2.0 the grain changes the light by a fixed
+    percentage. So a highlight keeps its grain and stays bright.
+    """
     chans = []
     for i, (suffix, size_mul) in enumerate(
             (("grain_r", 1.0), ("grain_g", 0.9), ("grain_b", 1.5))):
         features = 909.0 / max(s["size"] * size_mul, 0.1)
         noise = b.tex_clouds(suffix, img, features=features,
                              speed=0.371 + 0.11 * i)
-        centered = b.math('MULTIPLY', b.math('SUBTRACT', noise, 0.5),
-                          s["amount"] * (1.3 if i == 2 else 1.0))
-        chans.append(b.math('ADD', centered, 0.5))
+        chans.append(b.math('MULTIPLY', b.math('SUBTRACT', noise, 0.5),
+                            s["amount"] * (2.6 if i == 2 else 2.0)))
     comb = b.n('CompositorNodeCombineColor', mode='RGB')
     for i, ch in enumerate(chans):
         b.link(ch, comb.inputs[i])
     comb.inputs[3].default_value = 1.0
-    return b.mix(b.fac("Grain", s["strength"]), img, comb.outputs[0],
-                 blend='SOFT_LIGHT')
+    white = b.rgb((1.0, 1.0, 1.0))
+    black = b.rgb((0.0, 0.0, 0.0))
+    limited = b.mix(1.0, img, b.rgb((2.0, 2.0, 2.0)), blend='DARKEN')
+    limited = b.mix(1.0, limited, black, blend='LIGHTEN')
+    weight = b.mix(1.0, white, limited, blend='SUBTRACT')
+    change = b.mix(1.0, comb.outputs[0], weight, blend='MULTIPLY')
+    gain = b.mix(1.0, white, change, blend='ADD')
+    # A very strong grain must not turn the light negative.
+    gain = b.mix(1.0, gain, black, blend='LIGHTEN')
+    grained = b.mix(1.0, img, gain, blend='MULTIPLY')
+    return b.mix(b.fac("Grain", s["strength"]), img, grained)
 
 
 def _bld_weave(b, img, s):

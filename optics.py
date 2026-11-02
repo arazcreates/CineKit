@@ -6,6 +6,7 @@ Pure Python, no bpy — unit-testable outside Blender (tests/test_optics.py).
 All distances in millimetres unless suffixed otherwise.
 """
 
+import functools
 import math
 
 # Zeiss convention: circle of confusion = sensor diagonal / 1500.
@@ -32,6 +33,29 @@ INCIDENT_C = 250.0
 # ISO 100 = EV100 8.6) expose a scene lit by a strength-1 sun correctly.
 EXPOSURE_CALIBRATION = math.log2(
     LUMINOUS_EFFICACY * math.pi / (INCIDENT_C / 100.0))  # ~9.745
+
+# Diffraction uses the peak wavelength of photopic vision.
+WAVELENGTH_MM = 550e-6
+# Sigma of the Gaussian that fits the Airy intensity pattern, per lambda*N.
+AIRY_SIGMA = 0.42
+# A Gaussian MTF drops to 50% at MTF50 = MTF50_SIGMA / sigma.
+MTF50_SIGMA_MM = math.sqrt(math.log(2.0) / (2.0 * math.pi ** 2))  # ~0.1874
+# The Blender 5.2 Gaussian blur node uses radius = 3 * sigma (measured).
+BLUR_RADIUS_PER_SIGMA = 3.0
+# CineKit limits the lens blur radius, so a bad value cannot stall the
+# compositor.
+MAX_BLUR_RADIUS_PX = 100.0
+# Keys of the blur radius curve, as radius 3 * sigma in pixels. They are
+# closer together where the Blender kernel changes fast.
+BLUR_CURVE_KEYS = (0.0, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1, 0.125, 0.15,
+                   0.175, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.75, 1.0, 1.25,
+                   1.5, 1.75, 2.0, 4.0, 8.0, 16.0, 32.0)
+# The lens blur driver gives the radius in hundredths of a pixel. Blender
+# merges F-curve keys that are 0.01 or less apart on the x axis, and in
+# pixels some keys are that close.
+BLUR_DRIVER_SCALE = 100.0
+# Blender keeps 255 characters of a driver expression.
+DRIVER_EXPRESSION_LIMIT = 255
 
 
 def srgb_to_linear(value):
@@ -117,6 +141,275 @@ def ev100(fstop, time_s, iso):
     if fstop <= 0 or time_s <= 0 or iso <= 0:
         raise ValueError("f-stop, time and ISO must be positive")
     return math.log2(fstop * fstop / time_s) - math.log2(iso / 100.0)
+
+
+def t_stop(fstop, transmission=1.0):
+    """T-stop of a lens: the f-stop corrected for the light the glass loses.
+
+    T = N / sqrt(transmission). The exposure uses the T-stop. The depth of
+    field uses the f-stop.
+    """
+    if fstop <= 0 or not 0.0 < transmission <= 1.0:
+        raise ValueError("f-stop must be positive and transmission in (0, 1]")
+    return fstop / math.sqrt(transmission)
+
+
+def camera_ev100(fstop, time_s, iso, transmission=1.0, nd_stops=0.0):
+    """EV100 of the scene that these camera settings expose correctly.
+
+    It uses the T-stop, and an ND filter needs that many more stops of
+    scene light.
+    """
+    return ev100(t_stop(fstop, transmission), time_s, iso) + nd_stops
+
+
+def stops_closed(fstop, max_aperture):
+    """Stops from wide open: s = 2 * log2(N / N_max), never below 0."""
+    if fstop <= 0 or max_aperture <= 0:
+        raise ValueError("f-stops must be positive")
+    return max(0.0, 2.0 * math.log2(fstop / max_aperture))
+
+
+def aperture_shape(fstop, max_aperture, blades, rotation_deg=0.0,
+                   rotation_per_stop_deg=0.0, round_stops=0.0):
+    """(blade count, rotation in degrees) of the aperture at an f-stop.
+
+    The blade count is 0 (a round aperture) up to round_stops stops closed.
+    The polygon turns by rotation_per_stop_deg for each stop closed.
+    """
+    stops = stops_closed(fstop, max_aperture)
+    count = int(blades)
+    if count < 3 or stops <= round_stops + 1e-6:
+        count = 0
+    return count, rotation_deg + rotation_per_stop_deg * stops
+
+
+def magnification(focal_mm, focus_m):
+    """Thin-lens magnification m = f / (u - f) at a focus distance."""
+    f_m = focal_mm / 1000.0
+    if focus_m <= f_m:
+        raise ValueError("focus distance must be longer than the focal length")
+    return f_m / (focus_m - f_m)
+
+
+def diffraction_sigma_mm(fstop, mag=0.0):
+    """Gaussian sigma of the Airy pattern on the sensor, in mm.
+
+    The working f-number grows with magnification: N_eff = N * (1 + m).
+    """
+    return AIRY_SIGMA * WAVELENGTH_MM * fstop * (1.0 + mag)
+
+
+def aberration_sigma_mm(fstop, max_aperture, softness_um):
+    """Blur from lens aberrations, in mm on the sensor.
+
+    softness_um is the sigma wide open. Transverse spherical aberration
+    scales with the cube of the aperture diameter, so the blur falls with
+    (N_max / N)^3 when you stop down.
+    """
+    if fstop <= 0 or max_aperture <= 0:
+        raise ValueError("f-stops must be positive")
+    ratio = min(max_aperture / fstop, 1.0)
+    return softness_um / 1000.0 * ratio ** 3
+
+
+def lens_blur_sigma_mm(fstop, max_aperture, softness_um, focal_mm, focus_m,
+                       diffraction=True):
+    """Total lens blur sigma in mm: diffraction and aberrations add in
+    quadrature.
+
+    The magnification stops at 1:1, the limit of a macro lens, so a focus
+    distance at or inside the focal length gives a finite blur.
+    """
+    f_m = focal_mm / 1000.0
+    mag = f_m / max(focus_m - f_m, f_m)
+    sd = diffraction_sigma_mm(fstop, mag) if diffraction else 0.0
+    sa = aberration_sigma_mm(max(fstop, 0.1), max_aperture, softness_um)
+    return math.hypot(sd, sa)
+
+
+def frame_width_mm(sensor_fit, sensor_width, sensor_height, aspect):
+    """Width of the sensor area that the render frame shows.
+
+    aspect is the frame width over the frame height, with the pixel aspect.
+    Auto fit puts the sensor width on the longer side of the frame.
+    """
+    if sensor_fit == 'VERTICAL':
+        return sensor_height * aspect
+    if sensor_fit == 'HORIZONTAL':
+        return sensor_width
+    return sensor_width * min(aspect, 1.0)
+
+
+def mtf50_to_sigma_um(mtf50_lp_mm):
+    """Blur sigma in micrometers for a lens test result in line pairs per
+    mm."""
+    if mtf50_lp_mm <= 0:
+        raise ValueError("MTF50 must be positive")
+    return MTF50_SIGMA_MM / mtf50_lp_mm * 1000.0
+
+
+def blur_radius_px(sigma_mm, sensor_width_mm, width_px):
+    """Radius of the Blender Gaussian blur node for a sigma on the sensor."""
+    if sensor_width_mm <= 0 or width_px <= 0:
+        raise ValueError("sensor width and pixel width must be positive")
+    return BLUR_RADIUS_PER_SIGMA * sigma_mm * width_px / sensor_width_mm
+
+
+def blur_node_variance(radius):
+    """Variance in square pixels of the Blender Gaussian blur node.
+
+    The node samples exp(-9 k^2 / (2 r^2)) at whole pixels k, up to ceil(r)
+    pixels from the center, and normalizes the samples. This matches
+    measurements in Blender 5.2. Below a radius of about 2 pixels the
+    samples miss most of the curve, so the blur is weaker than
+    sigma = r / 3. At a radius of 0.5 or less the node does not blur.
+    """
+    if radius <= 0.0:
+        return 0.0
+    exponent = -9.0 / (2.0 * radius * radius)
+    total, weighted = 1.0, 0.0
+    for k in range(1, math.ceil(radius) + 1):
+        weight = math.exp(exponent * k * k)
+        total += 2.0 * weight
+        weighted += 2.0 * k * k * weight
+    return weighted / total
+
+
+def blur_node_radius(sigma_px):
+    """Blur node radius that blurs with the variance of sigma_px.
+
+    CineKit matches the variance, the second moment of the blur. A blur
+    below one pixel then softens fine detail by the correct amount.
+    """
+    if sigma_px <= 0.0:
+        return 0.0
+    target = sigma_px * sigma_px
+    low, high = 0.0, BLUR_RADIUS_PER_SIGMA * sigma_px + 2.0
+    while blur_node_variance(high) < target:
+        high *= 2.0
+    for _ in range(40):
+        middle = 0.5 * (low + high)
+        if blur_node_variance(middle) < target:
+            low = middle
+        else:
+            high = middle
+    return high
+
+
+@functools.lru_cache(maxsize=1)
+def blur_curve():
+    """Keys (driver value, blur node radius in px) for the driver F-curve.
+
+    The driver value is 3 * sigma in hundredths of a pixel
+    (BLUR_DRIVER_SCALE). The curve is linear between the keys and continues
+    the last step. From a sigma of 0.01 px up, the blur sigma is in 0.8 %
+    of the target.
+    """
+    return tuple((x * BLUR_DRIVER_SCALE,
+                  blur_node_radius(x / BLUR_RADIUS_PER_SIGMA))
+                 for x in BLUR_CURVE_KEYS)
+
+
+def blur_curve_radius(radius):
+    """The blur node radius that the driver curve gives for 3 * sigma px."""
+    value = radius * BLUR_DRIVER_SCALE
+    keys = blur_curve()
+    index = 1
+    while index < len(keys) - 1 and value > keys[index][0]:
+        index += 1
+    (x0, y0), (x1, y1) = keys[index - 1], keys[index]
+    return y0 + (y1 - y0) * (value - x0) / (x1 - x0)
+
+
+def lens_blur_radii_px(sigma_mm, frame_mm, width_px, squeeze=1.0,
+                       pixel_aspect=1.0):
+    """(horizontal, vertical) radius 3 * sigma in pixels of a round blur on
+    the sensor.
+
+    frame_mm is the sensor width across the frame (frame_width_mm). With an
+    anamorphic lens it holds the squeeze, and the desqueezed image makes
+    the blur wider by the squeeze. pixel_aspect is pixel_aspect_x divided
+    by pixel_aspect_y. blur_curve_radius gives the blur node radius.
+    """
+    radius = blur_radius_px(sigma_mm, frame_mm, width_px)
+    return (min(radius * squeeze, MAX_BLUR_RADIUS_PX),
+            min(radius * pixel_aspect, MAX_BLUR_RADIUS_PX))
+
+
+# Driver variables of the lens blur: (name, what it reads).
+LENS_BLUR_VARIABLES = (
+    ("n", "f-stop of the depth of field"),
+    ("a", "widest f-stop"),
+    ("s", "softness wide open in micrometers"),
+    ("d", "diffraction on (1) or off (0)"),
+    ("f", "focal length in mm"),
+    ("u", "focus distance in m"),
+    ("w", "sensor width in mm"),
+    ("h", "sensor height in mm"),
+    ("t", "sensor fit: 0 Auto, 1 Horizontal, 2 Vertical"),
+    ("q", "anamorphic squeeze"),
+    ("x", "render width in pixels"),
+    ("y", "render height in pixels"),
+    ("p", "render percentage"),
+    ("i", "pixel aspect x"),
+    ("j", "pixel aspect y"),
+)
+
+
+def lens_blur_driver(horizontal):
+    """Driver expression for one blur radius 3 * sigma, in hundredths of a
+    render pixel.
+
+    It is the same math as frame_width_mm, lens_blur_sigma_mm and
+    lens_blur_radii_px, written as a simple expression: Blender runs it
+    without Python and keeps only DRIVER_EXPRESSION_LIMIT characters. See
+    LENS_BLUR_VARIABLES for the names. The keys of blur_curve on the driver
+    F-curve turn the value into the blur node radius.
+    """
+    aspect = "x*i/(y*j)"
+    # min(max(aspect, t), 1) is min(aspect, 1) for Auto and 1 for Horizontal.
+    frame = f"((t<1.5)*w*min(max({aspect},t),1)+(t>1.5)*h*{aspect})"
+    airy_um = f"{AIRY_SIGMA * WAVELENGTH_MM * 1000.0:.6f}"
+    sigma_um = (f"sqrt(pow({airy_um}*d*n*(1+f/max(1000*u-f,f)),2)"
+                f"+pow(s*pow(min(a/max(n,0.1),1),3),2))")
+    # Radius per sigma, micrometers to mm, the render percentage and the
+    # driver units.
+    scale = f"{BLUR_RADIUS_PER_SIGMA * 1e-5 * BLUR_DRIVER_SCALE:.8f}"
+    stretch = "q" if horizontal else "i/j"
+    return (f"min({scale}*x*p*{stretch}*{sigma_um}/{frame},"
+            f"{MAX_BLUR_RADIUS_PX * BLUR_DRIVER_SCALE:g})")
+
+
+def unit_focus_focal(focal_mm, focus_m, amount=1.0):
+    """Focal length that gives the field of view at a focus distance.
+
+    A thin lens that focuses as a whole moves away from the sensor, and
+    the image distance v = f * u / (u - f) sets the field of view. amount
+    scales the effect: 1 is a lens that focuses as a whole, 0 is a fully
+    compensated lens, and a negative value widens the view at close focus.
+    """
+    f_m = focal_mm / 1000.0
+    u = max(focus_m, f_m * 1.05)
+    return focal_mm * (1.0 + amount * f_m / (u - f_m))
+
+
+def stylized_breathing_focal(focal_mm, focus_m, amount):
+    """The breathing model of earlier CineKit versions."""
+    return focal_mm * (1.0 + amount * 0.05 / max(focus_m, 0.25))
+
+
+def rolling_shutter(exposure_s, readout_s, fps):
+    """Cycles values for a rolling shutter.
+
+    Returns (motion_blur_shutter in frames, rolling_shutter_duration). The
+    first line starts at the shutter open time and the last line ends at
+    the close time, so the full window is exposure + readout.
+    """
+    if exposure_s <= 0 or readout_s < 0 or fps <= 0:
+        raise ValueError("exposure and fps must be positive, readout >= 0")
+    window = exposure_s + readout_s
+    return window * fps, exposure_s / window
 
 
 def scene_exposure_for_ev100(ev, compensation=0.0):

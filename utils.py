@@ -5,6 +5,7 @@
 import contextlib
 import json
 import os
+import struct
 import uuid
 
 import bpy
@@ -146,6 +147,9 @@ def add_driver(id_block, path, expression, variables=(), index=-1):
     they work when Python auto-run is off. Raises CKError on linked data.
     """
     require_editable(id_block, "Driver target")
+    if len(expression.encode("utf-8")) > 255:
+        # Blender keeps 255 bytes of an expression and drops the rest.
+        raise CKError(f"The driver expression for '{path}' is too long.")
     try:
         fcu = id_block.driver_add(path, index) if index >= 0 \
             else id_block.driver_add(path)
@@ -180,6 +184,66 @@ def add_driver(id_block, path, expression, variables=(), index=-1):
                       "dependency cycle is the usual cause. CineKit "
                       "changed nothing.")
     return fcu
+
+
+# The keys of a new driver F-curve: output = driver value.
+PLAIN_DRIVER_KEYS = ((0.0, 0.0), (1.0, 1.0))
+
+
+def _float32(value):
+    return struct.unpack("f", struct.pack("f", value))[0]
+
+
+def keys_merge(x_before, x_after):
+    """True when Blender keeps only one of two F-curve keys.
+
+    keyframe_points.insert() and FCurve.update() treat keys 0.01 or less
+    apart on the x axis as one key. Blender compares float32 values.
+    """
+    step = _float32(_float32(x_after) - _float32(x_before))
+    return abs(step) <= _float32(0.01)
+
+
+def _variable_matches(var, spec):
+    target = var.targets[0]
+    if spec[1] == 'LOC_DIFF':
+        return (var.type == 'LOC_DIFF' and target.id == spec[2]
+                and var.targets[1].id == spec[3])
+    if spec[1] == 'TRANSFORMS':
+        return (var.type == 'TRANSFORMS' and target.id == spec[2]
+                and target.transform_type == spec[3])
+    return (var.type == 'SINGLE_PROP' and target.id == spec[1]
+            and target.data_path == spec[2]
+            and (len(spec) < 4 or target.id_type == spec[3]))
+
+
+def driver_matches(id_block, path, expression, variables=(),
+                   keys=PLAIN_DRIVER_KEYS, index=-1):
+    """True when the driver on path already has this setup.
+
+    Use it to keep a driver that is already correct. A new driver makes
+    Blender rebuild the dependency graph, and that slows playback down.
+    keys are the (x, y) points of the driver F-curve.
+    """
+    anim = getattr(id_block, "animation_data", None)
+    if anim is None:
+        return False
+    fcu = anim.drivers.find(path, index=max(index, 0))
+    if fcu is None:
+        return False
+    drv = fcu.driver
+    if (drv.type != 'SCRIPTED' or not drv.is_valid
+            or drv.expression != expression
+            or len(drv.variables) != len(variables)):
+        return False
+    if not all(var.name == spec[0] and _variable_matches(var, spec)
+               for var, spec in zip(drv.variables, variables)):
+        return False
+    points = fcu.keyframe_points
+    if len(points) != len(keys):
+        return False
+    return all(abs(point.co[0] - x) < 1e-4 and abs(point.co[1] - y) < 1e-4
+               for point, (x, y) in zip(points, keys))
 
 
 def remove_driver(id_block, path, index=-1):

@@ -87,7 +87,9 @@ class CK_OT_auto_expose(bpy.types.Operator):
         # metered exposure, and removing the look gives the metered value.
         ev_target = (optics.EXPOSURE_CALIBRATION + ck.exposure_comp
                      - needed_exposure)
-        iso = 100.0 * (ck.aperture ** 2 / time_s) / (2.0 ** ev_target)
+        # EV100 = log2(T² / t) - log2(ISO / 100) + ND. Solve for the ISO.
+        tstop = optics.t_stop(ck.aperture, ck.transmission)
+        iso = 100.0 * (tstop ** 2 / time_s) / (2.0 ** (ev_target - ck.nd_stops))
         iso_clamped = int(min(max(iso, 25), 204800))
         ck.iso = iso_clamped  # update callback re-syncs scene exposure
         residual = math.log2(iso / iso_clamped) if iso > 0 else 0.0
@@ -99,6 +101,73 @@ class CK_OT_auto_expose(bpy.types.Operator):
         else:
             self.report({'INFO'},
                         f"Metered {l_avg:.4f} avg → ISO {iso_clamped}")
+        return {'FINISHED'}
+
+
+def _context_camera(context):
+    """Camera data of the Properties editor, or of the active scene
+    camera."""
+    cam = getattr(context, "camera", None)
+    if cam is not None:
+        return cam
+    obj = context.scene.camera
+    return obj.data if obj is not None and obj.type == 'CAMERA' else None
+
+
+class CK_OT_breathing_point_add(bpy.types.Operator):
+    bl_idname = "cinekit.breathing_point_add"
+    bl_label = "Add Breathing Point"
+    bl_description = ("Add a measured point: the focus distance on the lens "
+                      "scale and the focal length at that distance. The new "
+                      "point starts at the current focus distance")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        cam = _context_camera(context)
+        return cam is not None and not utils.is_linked(cam)
+
+    def execute(self, context):
+        cam = _context_camera(context)
+        ck = cam.cinekit
+        with utils.suppress_updates():
+            point = ck.breathing_points.add()
+            point.distance = max(rig.focus_mark_m(cam), 0.01)
+            point.focal = rig.base_lens(cam)
+            ck.breathing_index = len(ck.breathing_points) - 1
+        try:
+            rig.set_breathing(cam)
+        except CKError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class CK_OT_breathing_point_remove(bpy.types.Operator):
+    bl_idname = "cinekit.breathing_point_remove"
+    bl_label = "Remove Breathing Point"
+    bl_description = "Remove the selected measured point"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        cam = _context_camera(context)
+        return (cam is not None and not utils.is_linked(cam)
+                and 0 <= cam.cinekit.breathing_index
+                < len(cam.cinekit.breathing_points))
+
+    def execute(self, context):
+        cam = _context_camera(context)
+        ck = cam.cinekit
+        with utils.suppress_updates():
+            ck.breathing_points.remove(ck.breathing_index)
+            ck.breathing_index = max(min(ck.breathing_index,
+                                         len(ck.breathing_points) - 1), 0)
+        try:
+            rig.set_breathing(cam)
+        except CKError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
         return {'FINISHED'}
 
 
@@ -426,6 +495,8 @@ class CK_OT_orbit_one_rev(bpy.types.Operator):
 
 CLASSES = (
     CK_OT_auto_expose,
+    CK_OT_breathing_point_add,
+    CK_OT_breathing_point_remove,
     CK_OT_release_exposure,
     CK_OT_rig_dolly,
     CK_OT_rig_crane,

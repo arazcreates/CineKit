@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "cinekit"
-version = "1.2.0"
+version = "1.3.0"
 name = "CineKit"
 tagline = "Physical cameras, shots, rigs, lighting and film looks"
 maintainer = "Araz Creates <araz.design3d@gmail.com>"
@@ -25,6 +25,7 @@ paths_exclude_pattern = [
   "/.git/",
   "/.github/",
   "/dist/",
+  "/docs/",
   "*.blend1",
   ".gitignore",
   ".gitattributes",

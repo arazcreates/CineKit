@@ -195,6 +195,86 @@ def test_looks(m, scene):
           f"({engine._get_comp_tree(scene)} vs {comp_tree_before})")
 
 
+def test_hdr_highlights(m, scene):
+    engine = m["engine"]
+    print("\n== Looks on very bright pixels ==")
+    import tempfile
+    before = snapshot()
+    render = scene.render
+    ims = render.image_settings
+    saved = (render.resolution_x, render.resolution_y, render.filepath,
+             ims.file_format, ims.color_depth, scene.cycles.samples,
+             scene.compositing_node_group)
+    render.resolution_x, render.resolution_y = 160, 90
+    render.resolution_percentage = 100
+    ims.file_format = 'OPEN_EXR'
+    ims.color_depth = '32'
+    scene.cycles.samples = 1
+    tree = bpy.data.node_groups.new("ck_hdr", 'CompositorNodeTree')
+    tree.interface.new_socket("Image", in_out='OUTPUT',
+                              socket_type='NodeSocketColor')
+    feed = tree.nodes.new('CompositorNodeImage')
+    tree.links.new(feed.outputs[0], tree.nodes.new('NodeGroupOutput').inputs[0])
+    scene.compositing_node_group = tree
+    folder = tempfile.TemporaryDirectory(prefix="ck_smoke_")
+
+    def shot(background, spot=None):
+        """The scene-linear result for an image at the size of the frame."""
+        height, width = render.resolution_y, render.resolution_x
+        pixels = np.ones((height, width, 4), dtype=np.float32)
+        pixels[..., :3] = background
+        if spot is not None:
+            pixels[height // 3:height * 2 // 3,
+                   width // 3:width * 2 // 3, :3] = spot
+        image = bpy.data.images.new("ck_hdr", width, height, float_buffer=True)
+        image.colorspace_settings.name = 'Non-Color'
+        image.pixels.foreach_set(pixels.ravel())
+        feed.image = image
+        render.filepath = os.path.join(folder.name, "shot.exr")
+        bpy.ops.render.render(write_still=True)
+        out = bpy.data.images.load(render.filepath)
+        out.colorspace_settings.name = 'Non-Color'
+        data = np.empty(len(out.pixels), dtype=np.float32)
+        out.pixels.foreach_get(data)
+        feed.image = None
+        bpy.data.images.remove(out)
+        bpy.data.images.remove(image)
+        return data.reshape(-1, 4)[:, :3]
+
+    def only(name):
+        for param in scene.cinekit.look_params:
+            param.value = 1.0 if param.name == name else 0.0
+            engine.push_param(scene, param)
+
+    for look_id in ("16mm", "super8"):
+        engine.apply_look(scene, look_id)
+        rgb = shot(100.0)
+        check(f"{look_id}: a pixel at 100 stays positive in every channel",
+              rgb.min() > 0.0, f"(min {rgb.min():.3f})")
+        check(f"{look_id}: a pixel at 100 stays bright", rgb.mean() > 50.0,
+              f"(mean {rgb.mean():.3f})")
+        only("Grain")
+        rgb = shot(100.0)
+        spread = rgb.std() / max(rgb.mean(), 1e-6)
+        check(f"{look_id}: a pixel at 100 keeps its grain",
+              0.001 < spread < 0.2, f"(relative spread {spread:.4f})")
+        engine.remove_look(scene)
+
+    engine.apply_look(scene, "vhs")
+    only("Chroma Bleed")
+    rgb = shot(0.18, (100.0, 0.0, 0.0))
+    check("vhs: chroma bleed of a bright red light stays positive",
+          rgb.min() >= 0.0, f"(min {rgb.min():.3f})")
+    engine.remove_look(scene)
+
+    folder.cleanup()
+    (render.resolution_x, render.resolution_y, render.filepath,
+     ims.file_format, ims.color_depth, scene.cycles.samples,
+     scene.compositing_node_group) = saved
+    bpy.data.node_groups.remove(tree)
+    compare("bright pixels: counts restored", before, snapshot())
+
+
 def test_look_camera_layer(m, scene, cam_obj):
     engine, rig, optics = m["engine"], m["rig"], m["optics"]
     print("\n== Look camera layer ==")
@@ -606,6 +686,344 @@ def test_handheld_animation(m, scene, cam_obj):
     compare("handheld animation: counts restored", before, snapshot())
 
 
+def test_lens_model(m, scene, cam_obj):
+    rig, optics, engine = m["rig"], m["optics"], m["engine"]
+    cam = cam_obj.data
+    ck = cam.cinekit
+    if not hasattr(ck, "nd_stops"):
+        print("\n  (no physical lens model, section skipped)")
+        return
+    print("\n== Physical lens model ==")
+    before = snapshot()
+    vs = scene.view_settings
+    cam.lens, cam.sensor_width, cam.sensor_height = 50.0, 36.0, 24.0
+    cam.sensor_fit = 'AUTO'
+    cam.dof.focus_distance = 5.0
+    ck.enabled = True
+    ck.aperture = 2.8
+    # An earlier section applied a lens preset with its own transmission.
+    ck.transmission, ck.nd_stops = 1.0, 0.0
+    exposure = vs.exposure
+
+    ck.nd_stops = 2.0
+    check("ND filter lowers the exposure by its stops",
+          close(vs.exposure, exposure - 2.0), f"({vs.exposure:.4f})")
+    ck.nd_stops = 0.0
+    ck.transmission = 0.81
+    check("transmission: the exposure uses the T-stop",
+          close(vs.exposure, exposure + math.log2(0.81)),
+          f"({vs.exposure:.4f})")
+    ck.transmission = 1.0
+
+    # Aperture shape from a lens preset and the f-stop.
+    ck.lens_preset = "prime_35"
+    check("lens preset turns on the aperture shape",
+          ck.aperture_shape and ck.blades == 9 and close(ck.max_aperture, 1.4))
+    ck.aperture = 1.4
+    check("aperture is round wide open", cam.dof.aperture_blades == 0,
+          f"({cam.dof.aperture_blades})")
+    ck.aperture = 5.6
+    check("aperture is a polygon stopped down", cam.dof.aperture_blades == 9)
+    ck.lens_preset = "prime_58_vintage"
+    ck.aperture = 8.0                       # 4 stops closed from f/2
+    check("aperture polygon turns per stop",
+          close(cam.dof.aperture_rotation, math.radians(16.0), 1e-5),
+          f"({math.degrees(cam.dof.aperture_rotation):.2f} deg)")
+
+    # Anamorphic squeeze.
+    has_sensors = hasattr(ck, "sensor_preset")   # CineKit 1.x has none
+    if has_sensors:
+        ck.sensor_preset = "super35"
+    width = cam.sensor_width
+    ck.lens_preset = "anamorphic_50_2x"
+    check("anamorphic squeeze widens the effective sensor",
+          close(cam.sensor_width, width * 2.0), f"({cam.sensor_width:.3f})")
+    check("anamorphic bokeh ratio", close(cam.dof.aperture_ratio, 2.0))
+    if has_sensors:
+        ck.sensor_preset = "full_frame"
+        check("sensor preset keeps the squeeze", close(cam.sensor_width, 72.0))
+        width = 36.0
+    ck.lens_preset = "prime_50"
+    check("a spherical lens gives the sensor width back",
+          close(cam.sensor_width, width) and close(cam.dof.aperture_ratio, 1.0),
+          f"({cam.sensor_width:.3f})")
+    if has_sensors:
+        ck.sensor_preset = 'NONE'
+        cam.sensor_width = 36.0
+
+    # Rolling shutter.
+    cycles = scene.cycles
+    cycles.rolling_shutter_type, cycles.rolling_shutter_duration = 'NONE', 0.1
+    ck.shutter_mode, ck.shutter_speed = 'SPEED', 50
+    ck.drive_motion_blur = True
+    ck.readout_ms = 20.0
+    ck.rolling_shutter = True
+    fps = scene.render.fps / scene.render.fps_base
+    window, duration = optics.rolling_shutter(0.02, 0.02, fps)
+    check("rolling shutter drives Cycles",
+          cycles.rolling_shutter_type == 'TOP'
+          and close(cycles.rolling_shutter_duration, duration)
+          and close(scene.render.motion_blur_shutter, min(window, 2.0)),
+          f"({cycles.rolling_shutter_duration:.3f}, "
+          f"{scene.render.motion_blur_shutter:.3f})")
+    ck.rolling_shutter = False
+    check("rolling shutter off gives the values back",
+          cycles.rolling_shutter_type == 'NONE'
+          and close(cycles.rolling_shutter_duration, 0.1))
+
+    # Lens softness in the compositor.
+    ck.lens_preset = "prime_35"
+    ck.aperture = 8.0
+    ck.lens_softness = True
+    node = engine._find_pipeline_node(scene)
+    size = engine._find_node(node.node_tree, engine._LENS_SIZE_TAG) \
+        if node is not None else None
+    check("lens softness adds the blur", size is not None)
+
+    def expected_sigmas(data):
+        """(horizontal, vertical) blur sigma in pixels, worked out apart
+        from CineKit."""
+        render = scene.render
+        aspect = (render.resolution_x * render.pixel_aspect_x
+                  / (render.resolution_y * render.pixel_aspect_y))
+        if data.sensor_fit == 'VERTICAL':
+            width_mm = data.sensor_height * aspect
+        elif data.sensor_fit == 'AUTO' and aspect < 1.0:
+            width_mm = data.sensor_width * aspect
+        else:
+            width_mm = data.sensor_width
+        lens = data.cinekit
+        sigma = optics.lens_blur_sigma_mm(
+            data.dof.aperture_fstop, lens.max_aperture, lens.softness_um,
+            data.lens, data.dof.focus_distance, lens.diffraction)
+        sigma_px = (sigma * render.resolution_x
+                    * render.resolution_percentage / 100.0 / width_mm)
+        return (sigma_px * lens.squeeze,
+                sigma_px * render.pixel_aspect_x / render.pixel_aspect_y)
+
+    def radii_match(label, data):
+        """The blur node gives the sigma of the lens, also below 1 px."""
+        update()
+        radii = (size.inputs[0].default_value, size.inputs[1].default_value)
+        got = [math.sqrt(optics.blur_node_variance(r)) for r in radii]
+        want = expected_sigmas(data)
+        check(f"lens blur: {label}",
+              all(close(g, w, max(w * 0.01, 1e-4))
+                  for g, w in zip(got, want)),
+              f"(sigma {got[0]:.4f} x {got[1]:.4f}, want {want[0]:.4f} x "
+              f"{want[1]:.4f} px, node radius {radii[0]:.3f})")
+
+    if size is not None:
+        render = scene.render
+        radii_match("f/8", cam)
+        ck.aperture = 1.4
+        radii_match("wide open", cam)
+        ck.aperture = 22.0
+        radii_match("f/22", cam)
+        render.resolution_percentage = 50
+        radii_match("50% render", cam)
+        render.resolution_percentage = 100
+        cam.sensor_fit = 'VERTICAL'
+        radii_match("vertical fit", cam)
+        render.resolution_x, render.resolution_y = 1080, 1920
+        cam.sensor_fit = 'HORIZONTAL'
+        radii_match("horizontal fit, portrait frame", cam)
+        cam.sensor_fit = 'AUTO'
+        radii_match("auto fit, portrait frame", cam)
+        render.resolution_x, render.resolution_y = 1920, 1080
+        render.pixel_aspect_x = 2.0
+        radii_match("wide pixels", cam)
+        render.pixel_aspect_x = 1.0
+        ck.lens_preset = "anamorphic_50_2x"
+        ck.aperture = 8.0
+        radii_match("anamorphic lens", cam)
+        cam.dof.focus_distance = 0.02
+        radii_match("focus inside the focal length", cam)
+        cam.dof.focus_distance = 5.0
+        ck.lens_preset = "prime_35"
+        ck.aperture = 8.0
+
+        # A driver that is already correct stays: a new driver rebuilds
+        # the dependency graph. driver_add returns the same F-curve, so
+        # check the condition that skips the rebuild.
+        ck.aperture = 5.6
+        update()
+        variables = engine._lens_blur_variables(scene, cam)
+        current = [m["utils"].driver_matches(
+            node.node_tree, f'nodes["{size.name}"].inputs[{index}]'
+            '.default_value', optics.lens_blur_driver(index == 0),
+            variables, optics.blur_curve()) for index in (0, 1)]
+        counts = [len(fcu.keyframe_points)
+                  for fcu in node.node_tree.animation_data.drivers
+                  if size.name in fcu.data_path]
+        check("the lens blur drivers stay current after a setting change",
+              all(current) and counts == [len(optics.blur_curve())] * 2,
+              f"({current}, keys {counts})")
+        ck.aperture = 8.0
+
+        # A camera switch points the drivers at the new camera.
+        cam2_data = bpy.data.cameras.new("SmokeLensCam2")
+        cam2 = bpy.data.objects.new("SmokeLensCam2", cam2_data)
+        scene.collection.objects.link(cam2)
+        cam2_data.cinekit.enabled = True
+        cam2_data.cinekit.aperture = 16.0
+        cam2_data.cinekit.lens_softness = True
+        scene.camera = cam2
+        rig.sync_active_camera(scene)
+        radii_match("after a camera switch", cam2_data)
+        scene.camera = cam_obj
+        rig.sync_active_camera(scene)
+        radii_match("after the switch back", cam)
+
+        # A timeline marker switches the camera during playback.
+        marker = scene.timeline_markers.new("SmokeLensMarker", frame=5)
+        marker.camera = cam2
+        scene.frame_set(5)
+        check("a marker switches the active camera", scene.camera == cam2)
+        radii_match("after a marker camera switch", cam2_data)
+        scene.timeline_markers.remove(marker)
+        scene.camera = cam_obj
+        scene.frame_set(1)
+        rig.sync_active_camera(scene)
+        radii_match("after the marker test", cam)
+        bpy.data.objects.remove(cam2, do_unlink=True)
+        bpy.data.cameras.remove(cam2_data)
+    bad = not_simple_drivers()
+    check("lens drivers are simple expressions", not bad, f"({bad})")
+    ck.lens_softness = False
+    check("lens softness off removes the pipeline",
+          engine._find_pipeline_node(scene) is None)
+
+    # Focus breathing models.
+    ck.lens_preset = 'NONE'
+    ck.min_focus, ck.pupil_offset = 0.0, 0.0
+    cam.lens = 50.0
+    ck.breathing_model, ck.breathing_amount = 'UNIT', 1.0
+    ck.focus_breathing = True
+    base = rig.base_lens(cam)
+    cam.dof.focus_distance = 0.5
+    update()
+    check("physical breathing follows the thin lens",
+          close(cam.lens, optics.unit_focus_focal(base, 0.5), 1e-3),
+          f"({cam.lens:.4f} vs {optics.unit_focus_focal(base, 0.5):.4f})")
+
+    def breathing_driver_stays(label):
+        cam.animation_data.drivers.find("lens").hide = True
+        ck.aperture = ck.aperture           # runs the update of the camera
+        fcu = cam.animation_data.drivers.find("lens")
+        check(f"a setting change keeps the {label} breathing driver",
+              fcu is not None and fcu.hide)
+        if fcu is not None:
+            fcu.hide = False
+
+    breathing_driver_stays("physical")
+    for distance, focal in ((0.3, 54.0), (1.0, 51.0), (100.0, 50.0)):
+        point = ck.breathing_points.add()
+        point.distance, point.focal = distance, focal
+    ck.breathing_model = 'TABLE'
+    cam.dof.focus_distance = 1.0
+    update()
+    check("measured breathing hits a table point",
+          close(cam.lens, base * 51.0 / 50.0, 1e-3), f"({cam.lens:.4f})")
+    breathing_driver_stays("measured")
+    ck.min_focus = 0.3
+    cam.dof.focus_distance = 0.1
+    update()
+    check("measured breathing stops at the minimum focus",
+          close(cam.lens, base * 54.0 / 50.0, 1e-3), f"({cam.lens:.4f})")
+    # Blender merges keys 0.01 apart. The table must match the merged keys,
+    # or CineKit makes the driver again at each change.
+    extra = ck.breathing_points.add()
+    extra.distance, extra.focal = 0.31, 53.5
+    breathing_driver_stays("measured, two points 0.01 m apart")
+    ck.breathing_points.remove(len(ck.breathing_points) - 1)
+    count = len(ck.breathing_points)
+    cam.dof.focus_distance = 2.0
+    result = bpy.ops.cinekit.breathing_point_add()
+    added = ck.breathing_points[ck.breathing_index]
+    check("add a breathing point at the focus mark",
+          result == {'FINISHED'} and len(ck.breathing_points) == count + 1
+          and close(added.distance, 2.0) and close(added.focal, base))
+    result = bpy.ops.cinekit.breathing_point_remove()
+    check("remove the breathing point",
+          result == {'FINISHED'} and len(ck.breathing_points) == count
+          and 0 <= ck.breathing_index < count)
+    ck.focus_breathing = False
+    ck.breathing_points.clear()
+    ck.min_focus = 0.0
+    check("breathing off gives the focal length back", close(cam.lens, base))
+    cam.dof.focus_distance = 5.0
+
+    # Keyframed physical settings apply on frame changes.
+    ck.aperture = 2.8
+    cam.keyframe_insert("cinekit.aperture", frame=1)
+    ck.aperture = 11.0
+    cam.keyframe_insert("cinekit.aperture", frame=10)
+    scene.frame_set(10)
+    check("animated aperture drives the depth of field",
+          close(cam.dof.aperture_fstop, 11.0, 1e-3),
+          f"(f/{cam.dof.aperture_fstop:.2f})")
+    scene.frame_set(1)
+    clear_animation(cam)
+
+    # Entrance pupil offset: a pan shows parallax.
+    ck.pupil_offset = 0.1
+    update()
+    start = cam_obj.matrix_world.translation.copy()
+    forward = cam_obj.matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))
+    heads = [(rig.create_crane, "crane")]
+    if hasattr(rig, "create_tripod"):          # CineKit 1.x has no tripod
+        heads.insert(0, (rig.create_pedestal, "pedestal"))
+        root = rig.create_tripod(bpy.context, cam_obj)
+        update()
+        check("pupil offset: the camera stays when the rig attaches",
+              (cam_obj.matrix_world.translation - start).length < 1e-4)
+        root["ck_pan"] = 90.0
+        root.update_tag()
+        update()
+        horizontal = Vector((forward.x, forward.y, 0.0)).length * 0.1
+        moved = (cam_obj.matrix_world.translation - start).length
+        check("pupil offset: a 90 degree pan moves the lens on a circle",
+              close(moved, math.sqrt(2.0) * horizontal, 1e-4),
+              f"({moved:.4f} vs {math.sqrt(2.0) * horizontal:.4f} m)")
+        rig.remove_rig(bpy.context, root)
+        update()
+        check("pupil offset: the camera returns",
+              (cam_obj.matrix_world.translation - start).length < 1e-5)
+    for create, label in heads:
+        root = create(bpy.context, cam_obj)
+        update()
+        head = cam_obj.parent
+        pivot = head.matrix_world.translation.copy()
+        check(f"pupil offset, {label}: the camera stays when the rig attaches",
+              (cam_obj.matrix_world.translation - start).length < 1e-4)
+        check(f"pupil offset, {label}: the head turns 0.1 m behind the lens",
+              close((cam_obj.matrix_world.translation - pivot).length, 0.1))
+        root["ck_tilt"] = root["ck_tilt"] + 30.0
+        root.update_tag()
+        update()
+        lever = (cam_obj.matrix_world.translation
+                 - head.matrix_world.translation).length
+        check(f"pupil offset, {label}: a tilt turns the lens about the head",
+              (head.matrix_world.translation - pivot).length < 1e-5
+              and close(lever, 0.1)
+              and (cam_obj.matrix_world.translation - start).length > 0.01,
+              f"(lever {lever:.4f} m)")
+        rig.remove_rig(bpy.context, root)
+        update()
+        check(f"pupil offset, {label}: the camera returns",
+              (cam_obj.matrix_world.translation - start).length < 1e-5)
+    ck.pupil_offset = 0.0
+
+    ck.aperture_shape = False
+    ck.enabled = False
+    cam.lens, cam.sensor_width, cam.sensor_height = 50.0, 36.0, 24.0
+    cam.sensor_fit = 'AUTO'
+    cam.dof.aperture_blades, cam.dof.aperture_rotation = 0, 0.0
+    cam.dof.aperture_ratio = 1.0
+    compare("physical lens model: counts restored", before, snapshot())
+
+
 def test_effects(m, scene, cam_obj):
     print("\n== Effects ==")
     before = snapshot()
@@ -841,6 +1259,7 @@ def run():
     m["utils"].ck_collection(scene)
 
     test_looks(m, scene)
+    test_hdr_highlights(m, scene)
     test_look_camera_layer(m, scene, cam_obj)
     test_scene_isolation(m, scene)
     test_timestamp(m, scene)
@@ -849,6 +1268,7 @@ def run():
     test_dolly_geometry(m, scene, cam_obj)
     test_advanced_dolly(m, scene, cam_obj)
     test_handheld_animation(m, scene, cam_obj)
+    test_lens_model(m, scene, cam_obj)
     if m["effects"] is not None:        # CineKit 1.x has no effects
         test_effects(m, scene, cam_obj)
     test_focus(m, scene, cam_obj)

@@ -43,9 +43,45 @@ def shutter_time_s(ck, fps):
 
 
 def compute_ev100(cam_data, scene):
+    """EV100 of the scene that the camera exposes correctly.
+
+    It uses the T-stop of the lens and the ND filter.
+    """
     ck = cam_data.cinekit
     fps = scene.render.fps / scene.render.fps_base
-    return optics.ev100(ck.aperture, shutter_time_s(ck, fps), ck.iso)
+    return optics.camera_ev100(ck.aperture, shutter_time_s(ck, fps), ck.iso,
+                               ck.transmission, ck.nd_stops)
+
+
+def squeeze_applied(cam_data):
+    """The anamorphic squeeze that CineKit multiplied into sensor_width."""
+    return float(cam_data.get("cinekit_squeeze_applied", 1.0))
+
+
+def focus_distance_m(cam_data):
+    """Focus distance from the entrance pupil, also with a focus object."""
+    focus_m = cam_data.dof.focus_distance
+    if cam_data.dof.focus_object:
+        cam_obj = _object_of_camera(cam_data)
+        if cam_obj:
+            focus_m = (cam_obj.matrix_world.translation -
+                       cam_data.dof.focus_object.matrix_world.translation
+                       ).length
+    return focus_m
+
+
+def focus_mark_m(cam_data):
+    """Focus distance as the lens scale shows it: from the sensor plane."""
+    return focus_distance_m(cam_data) + cam_data.cinekit.pupil_offset
+
+
+def settings_animated(cam_data):
+    """True when keyframes animate a CineKit setting of the camera."""
+    anim = cam_data.animation_data
+    if anim is None or anim.action is None:
+        return False
+    return any(fcu.data_path.startswith("cinekit.")
+               for fcu in utils.action_fcurves(anim.action))
 
 
 def look_bias(scene):
@@ -61,15 +97,11 @@ def dof_floor(cam_data):
 def dof_readout(cam_data, scene):
     """(hyperfocal_m, near_m, far_m, total_m) for the UI panel."""
     fstop = cam_data.dof.aperture_fstop
-    coc = optics.coc_mm(cam_data.sensor_width, cam_data.sensor_height)
-    focus_m = cam_data.dof.focus_distance
-    if cam_data.dof.focus_object:
-        cam_obj = _object_of_camera(cam_data)
-        if cam_obj:
-            focus_m = (cam_obj.matrix_world.translation -
-                       cam_data.dof.focus_object.matrix_world.translation
-                       ).length
-    focus_mm = max(focus_m, 0.001) * 1000.0
+    # The circle of confusion comes from the real sensor, without the
+    # anamorphic squeeze that CineKit adds to the width.
+    coc = optics.coc_mm(cam_data.sensor_width / squeeze_applied(cam_data),
+                        cam_data.sensor_height)
+    focus_mm = max(focus_distance_m(cam_data), 0.001) * 1000.0
     h = optics.hyperfocal_mm(cam_data.lens, fstop, coc)
     near, far = optics.dof_limits_mm(cam_data.lens, fstop, focus_mm, coc)
     total = far - near
@@ -87,16 +119,29 @@ def _object_of_camera(cam_data):
 
 
 def apply_camera(cam_data, scene):
-    """Push camera-local settings: DOF f-stop, breathing driver refresh.
+    """Push camera-local settings: DOF f-stop, aperture shape, breathing.
 
     A look can set a depth-of-field floor. The floor changes only the
     depth of field. The exposure keeps using the aperture of the camera.
+    The aperture shape follows the depth-of-field f-stop, because the iris
+    of the lens sets both.
     """
     ck = cam_data.cinekit
     if not ck.enabled or utils.is_linked(cam_data):
         return
     with utils.suppress_updates():
-        cam_data.dof.aperture_fstop = max(ck.aperture, dof_floor(cam_data))
+        fstop = max(ck.aperture, dof_floor(cam_data))
+        cam_data.dof.aperture_fstop = fstop
+        if ck.aperture_shape:
+            blades, rotation = optics.aperture_shape(
+                fstop, max(ck.max_aperture, 0.5), ck.blades,
+                math.degrees(ck.blade_rotation),
+                math.degrees(ck.blade_rotation_per_stop), ck.round_stops)
+            hard_max = cam_data.dof.bl_rna.properties[
+                "aperture_blades"].hard_max
+            cam_data.dof.aperture_blades = min(blades, hard_max)
+            cam_data.dof.aperture_rotation = math.radians(rotation)
+            cam_data.dof.aperture_ratio = ck.squeeze
     if ck.focus_breathing:
         try:
             set_breathing(cam_data)
@@ -137,6 +182,7 @@ def sync_active_camera(scene):
             _set_compositor_wb(scene, None)
         elif utils.fetch_state(scene, K.PREV_EXPOSURE) is not None:
             release_exposure_control(scene)
+        _update_lens_softness(scene)
         return
 
     ck = cam.data.cinekit
@@ -145,16 +191,60 @@ def sync_active_camera(scene):
     scene.view_settings.exposure = optics.scene_exposure_for_ev100(
         ev, ck.exposure_comp + bias)
 
+    fps = scene.render.fps / scene.render.fps_base
+    exposure_s = shutter_time_s(ck, fps)
+    readout_s = ck.readout_ms / 1000.0 if ck.rolling_shutter else 0.0
+    shutter, duration = optics.rolling_shutter(exposure_s, readout_s, fps)
     if ck.drive_motion_blur:
-        fps = scene.render.fps / scene.render.fps_base
-        shutter = optics.motion_blur_shutter(
-            ck.shutter_mode, ck.shutter_speed, ck.shutter_angle, fps)
         scene.render.motion_blur_shutter = min(max(shutter, 0.01), 2.0)
         if not state.get("shutter_driven"):
             state["shutter_driven"] = True
             utils.store_state(scene, K.PREV_EXPOSURE, state)
+    _apply_rolling_shutter(scene, state, ck.rolling_shutter, duration)
 
     apply_white_balance(scene, cam.data)
+    _update_lens_softness(scene)
+
+
+def _cycles_rolling(scene):
+    cycles = getattr(scene, "cycles", None)
+    if cycles is None or not hasattr(cycles, "rolling_shutter_type"):
+        return None
+    return cycles
+
+
+def _apply_rolling_shutter(scene, state, enabled, duration):
+    """Drive the Cycles rolling shutter. Store the user values first."""
+    cycles = _cycles_rolling(scene)
+    if cycles is None:
+        return
+    if enabled:
+        if "rolling" not in state:
+            state["rolling"] = {"type": cycles.rolling_shutter_type,
+                                "duration": cycles.rolling_shutter_duration}
+            utils.store_state(scene, K.PREV_EXPOSURE, state)
+        cycles.rolling_shutter_type = 'TOP'
+        cycles.rolling_shutter_duration = min(max(duration, 0.0), 1.0)
+    elif "rolling" in state:
+        _restore_rolling_shutter(scene, state)
+        utils.store_state(scene, K.PREV_EXPOSURE, state)
+
+
+def _restore_rolling_shutter(scene, state):
+    cycles = _cycles_rolling(scene)
+    prev = state.pop("rolling", None)
+    if cycles is None or prev is None:
+        return
+    cycles.rolling_shutter_type = prev["type"]
+    cycles.rolling_shutter_duration = prev["duration"]
+
+
+def _update_lens_softness(scene):
+    from .looks import engine
+    try:
+        engine.update_lens_softness(scene)
+    except CKError as exc:
+        print(f"CineKit: could not update the lens softness: {exc}")
 
 
 def on_camera_settings_changed(cam_data, scene):
@@ -191,6 +281,7 @@ def take_exposure_control(scene, mode="physical"):
             if state.get("shutter_driven") and "motion_blur_shutter" in state:
                 scene.render.motion_blur_shutter = state["motion_blur_shutter"]
             state["shutter_driven"] = False
+            _restore_rolling_shutter(scene, state)
         state["mode"] = mode
         state["bias"] = 0.0
         utils.store_state(scene, K.PREV_EXPOSURE, state)
@@ -212,6 +303,7 @@ def release_exposure_control(scene):
             scene.view_settings.exposure = state["exposure"]
             if state.get("shutter_driven") and "motion_blur_shutter" in state:
                 scene.render.motion_blur_shutter = state["motion_blur_shutter"]
+        _restore_rolling_shutter(scene, state)
         utils.clear_state(scene, K.PREV_EXPOSURE)
     _set_native_wb(scene, None)
     _set_compositor_wb(scene, None)
@@ -287,8 +379,53 @@ def apply_lens_preset(cam_data):
     cam_data.lens = lens["focal"]
     with utils.suppress_updates():
         ck.breathing_amount = lens["breathing"]
+        ck.breathing_model = lens["breathing_model"]
+        ck.breathing_points.clear()
+        for distance, focal in lens["breathing_table"]:
+            point = ck.breathing_points.add()
+            point.distance, point.focal = distance, focal
+        ck.max_aperture = lens["max_aperture"]
+        ck.transmission = lens["transmission"]
+        ck.aperture_shape = True
+        ck.blades = lens["blades"]
+        ck.blade_rotation = math.radians(lens["blade_rotation_deg"])
+        ck.blade_rotation_per_stop = math.radians(
+            lens["blade_rotation_per_stop_deg"])
+        ck.round_stops = lens["round_stops"]
+        ck.min_focus = lens["min_focus_m"]
+        ck.softness_um = lens["softness_um"]
+        if lens["entrance_pupil_mm"] > 0.0:
+            ck.pupil_offset = lens["entrance_pupil_mm"] / 1000.0
         if ck.aperture < lens["max_aperture"]:
             ck.aperture = lens["max_aperture"]  # the lens does not open wider
+    apply_squeeze(cam_data, lens["squeeze"])
+
+
+def apply_squeeze(cam_data, squeeze):
+    """Set the anamorphic squeeze of the lens.
+
+    An anamorphic lens squeezes a wider horizontal view onto the sensor.
+    CineKit renders the desqueezed image: the effective sensor width grows
+    by the squeeze factor, and the height stays. The focal length stays, so
+    the depth of field stays correct. The bokeh turns oval through the
+    aperture ratio.
+    """
+    if utils.is_linked(cam_data):
+        return
+    new = max(float(squeeze), 1.0)
+    applied = squeeze_applied(cam_data)
+    if abs(new - applied) > 1e-9:
+        if new > 1.0:
+            cam_data.sensor_fit = 'HORIZONTAL'
+        cam_data.sensor_width = cam_data.sensor_width / applied * new
+    if abs(new - 1.0) > 1e-9:
+        cam_data["cinekit_squeeze_applied"] = new
+    elif "cinekit_squeeze_applied" in cam_data.keys():
+        del cam_data["cinekit_squeeze_applied"]
+    with utils.suppress_updates():
+        cam_data.cinekit.squeeze = new
+        if cam_data.cinekit.aperture_shape:
+            cam_data.dof.aperture_ratio = new
 
 
 def base_lens(cam_data):
@@ -309,9 +446,18 @@ def set_base_lens(cam_data, lens):
 def set_breathing(cam_data):
     """Create or remove the focus-breathing driver on the focal length.
 
-    The model is stylized: the focal length grows by
-    amount * 5% / max(focus_m, 0.25). The shift shows at close focus and
-    is very small at a distance. The active look can scale the amount.
+    Three models:
+
+    - Stylized (earlier versions): the focal length grows by
+      amount * 5% / max(focus_m, 0.25).
+    - Physical: thin-lens breathing f * (1 + amount * f / (u - f)), with u
+      the distance from the entrance pupil. Amount 1 is a lens that focuses
+      as a whole.
+    - Measured: a smooth curve through measured focal lengths at focus
+      marks. The driver F-curve holds the table.
+
+    The focus mark (distance from the sensor plane) stops at the minimum
+    focus distance of the lens. The active look can scale the breathing.
     """
     utils.require_editable(cam_data, "Camera")
     ck = cam_data.cinekit
@@ -338,10 +484,55 @@ def set_breathing(cam_data):
                       cam_data.dof.focus_object)]
     else:
         variables = [("ck_dist", cam_data, "dof.focus_distance", 'CAMERA')]
-    utils.add_driver(
-        cam_data, "lens",
-        f"{base:.4f} * (1.0 + {amt:.5f} * 0.05 / max(ck_dist, 0.25))",
-        variables)
+
+    pupil = ck.pupil_offset
+    mark = f"max(ck_dist + {pupil:.6f}, {ck.min_focus:.6f})"
+    points = sorted((p.distance, p.focal) for p in ck.breathing_points)
+
+    # CineKit calls this on every change of a camera setting, and on every
+    # frame when keyframes animate the settings. A driver that is already
+    # correct stays, because a new driver rebuilds the dependency graph.
+    if ck.breathing_model == 'TABLE' and len(points) >= 2:
+        far_focal = points[-1][1]
+        table = []
+        for distance, focal in points:
+            value = base * (1.0 + scale * (focal / far_focal - 1.0))
+            if table and utils.keys_merge(table[-1][0], distance):
+                # Blender keeps the key position before and takes the new
+                # value.
+                table[-1] = (table[-1][0], value)
+            else:
+                table.append((distance, value))
+        if utils.driver_matches(cam_data, "lens", mark, variables, table):
+            return
+        # A new driver, so no keys of an older table stay.
+        utils.remove_driver(cam_data, "lens")
+        fcu = utils.add_driver(cam_data, "lens", mark, variables)
+        keys = fcu.keyframe_points
+        keys.clear()
+        for distance, focal in table:
+            key = keys.insert(distance, focal, options={'FAST'})
+            key.interpolation = 'BEZIER'
+            key.handle_left_type = key.handle_right_type = 'AUTO_CLAMPED'
+        fcu.extrapolation = 'CONSTANT'
+        fcu.update()
+        return
+
+    if ck.breathing_model == 'UNIT':
+        f_m = base / 1000.0
+        # Object distance from the entrance pupil, at least 1.05 f.
+        u = f"max({mark} - {pupil:.6f}, {f_m * 1.05:.6f})"
+        expression = (f"{base:.4f} * (1.0 + {amt:.5f} * {f_m:.6f} / "
+                      f"({u} - {f_m:.6f}))")
+    else:
+        expression = (f"{base:.4f} * (1.0 + {amt:.5f} * 0.05 / "
+                      f"max({mark} - {pupil:.6f}, 0.25))")
+    if utils.driver_matches(cam_data, "lens", expression, variables):
+        return
+    # A measured table leaves keys on the driver F-curve. Start from a
+    # clean driver, so this model gets the plain mapping.
+    utils.remove_driver(cam_data, "lens")
+    utils.add_driver(cam_data, "lens", expression, variables)
 
 
 # ===================================================================== rigs
@@ -393,6 +584,20 @@ def rig_root_of(obj):
             return node
         node = node.parent
     return None
+
+
+def head_pivot(cam_obj, world):
+    """World position of the pan and tilt axes of a camera head.
+
+    The Blender camera origin is the entrance pupil of the lens. A real
+    head turns the camera about a point behind it, near the sensor plane.
+    A pan then moves the pupil on a circle, and near and far objects shift
+    against each other (parallax).
+    """
+    offset = cam_obj.data.cinekit.pupil_offset if cam_obj.type == 'CAMERA' \
+        else 0.0
+    forward = world.to_quaternion() @ Vector((0.0, 0.0, -1.0))
+    return world.translation - forward * offset
 
 
 def find_member(root, role):
@@ -752,12 +957,13 @@ def create_crane(context, cam_obj, opts=None):
     root, rig_id, pre_world = _prepare_rig(context, cam_obj, K.RIG_CRANE,
                                            "CK_Crane")
     _point(root, "Base")
-    cam_loc = pre_world.translation
+    fwd = pre_world.to_quaternion() @ Vector((0, 0, -1))
+    # The head turns about the sensor plane, behind the entrance pupil.
+    cam_loc = head_pivot(cam_obj, pre_world)
     boom = min(max(opts.get("boom", 45.0), 10.0), 80.0)
     drop = max(opts.get("base_drop", 1.5), 0.2)
     length = drop / math.sin(math.radians(boom))
 
-    fwd = pre_world.to_quaternion() @ Vector((0, 0, -1))
     heading = Vector((fwd.x, fwd.y, 0.0))
     if heading.length < 1e-4:          # the camera looks straight up or down
         up = pre_world.to_quaternion() @ Vector((0, 1, 0))

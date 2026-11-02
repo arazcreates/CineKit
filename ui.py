@@ -9,7 +9,7 @@ import math
 import bpy
 
 from . import constants as K
-from . import lighting, rig, utils
+from . import lighting, optics, rig, utils
 
 
 def _linked_warning(layout, id_block, what):
@@ -43,13 +43,17 @@ def _draw_physical(layout, context, cam_data):
                   icon='SHADERFX')
     col.separator()
     col.prop(ck, "iso")
-    col.prop(ck, "aperture", text="Aperture f/")
+    row = col.row(align=True)
+    row.prop(ck, "aperture", text="Aperture f/")
+    if ck.transmission < 0.999:
+        row.label(text=f"T{optics.t_stop(ck.aperture, ck.transmission):.2f}")
     row = col.row(align=True)
     row.prop(ck, "shutter_mode", expand=True)
     if ck.shutter_mode == 'SPEED':
         col.prop(ck, "shutter_speed")
     else:
         col.prop(ck, "shutter_angle")
+    col.prop(ck, "nd_stops")
     col.prop(ck, "exposure_comp")
     try:
         ev = rig.compute_ev100(cam_data, scene)
@@ -61,6 +65,20 @@ def _draw_physical(layout, context, cam_data):
     if not is_exposure_cam:
         col.label(text="The active camera sets the exposure", icon='INFO')
     col.prop(ck, "drive_motion_blur")
+
+    header, body = layout.panel("CK_rolling_shutter", default_closed=True)
+    header.prop(ck, "rolling_shutter")
+    if body is not None:
+        body.active = ck.rolling_shutter
+        body.prop(ck, "readout_ms")
+        if scene.render.engine != K.CYCLES:
+            body.label(text="Rolling shutter renders in Cycles only",
+                       icon='INFO')
+
+    header, body = layout.panel("CK_lens_model", default_closed=True)
+    header.label(text="Lens Model", icon='CAMERA_DATA')
+    if body is not None:
+        _draw_lens_model(body, context, cam_data)
 
     box = layout.box()
     box.prop(ck, "wb_enabled", toggle=True, icon='COLOR')
@@ -74,7 +92,69 @@ def _draw_physical(layout, context, cam_data):
     box = layout.box()
     box.prop(ck, "focus_breathing")
     if ck.focus_breathing:
-        box.prop(ck, "breathing_amount", slider=True)
+        box.prop(ck, "breathing_model")
+        if ck.breathing_model == 'TABLE':
+            row = box.row()
+            row.template_list("CK_UL_breathing_points", "", ck,
+                              "breathing_points", ck, "breathing_index",
+                              rows=3)
+            sub = row.column(align=True)
+            sub.operator("cinekit.breathing_point_add", text="", icon='ADD')
+            sub.operator("cinekit.breathing_point_remove", text="",
+                         icon='REMOVE')
+            if len(ck.breathing_points) < 2:
+                box.label(text="Add 2 or more measured points",
+                          icon='ERROR')
+        else:
+            box.prop(ck, "breathing_amount", slider=True)
+        box.label(text=f"Focal length now: {cam_data.lens:.2f} mm",
+                  icon='DRIVER_DISTANCE')
+
+
+def _draw_lens_model(layout, context, cam_data):
+    """Lens values that the lens preset fills: aperture, focus, softness."""
+    ck = cam_data.cinekit
+    col = layout.column(align=True)
+    col.prop(ck, "max_aperture")
+    col.prop(ck, "transmission")
+    col.prop(ck, "min_focus")
+    col.prop(ck, "pupil_offset")
+    col.prop(ck, "squeeze")
+
+    layout.prop(ck, "aperture_shape")
+    col = layout.column(align=True)
+    col.active = ck.aperture_shape
+    col.prop(ck, "blades")
+    col.prop(ck, "blade_rotation")
+    col.prop(ck, "blade_rotation_per_stop")
+    col.prop(ck, "round_stops")
+
+    layout.prop(ck, "lens_softness")
+    col = layout.column(align=True)
+    col.active = ck.lens_softness
+    col.prop(ck, "softness_um")
+    col.prop(ck, "diffraction")
+    render = context.scene.render
+    try:
+        # The same values as the compositor drivers.
+        sigma = optics.lens_blur_sigma_mm(
+            cam_data.dof.aperture_fstop, ck.max_aperture, ck.softness_um,
+            cam_data.lens, cam_data.dof.focus_distance, ck.diffraction)
+        aspect = (render.resolution_x * render.pixel_aspect_x
+                  / (render.resolution_y * render.pixel_aspect_y))
+        radii = optics.lens_blur_radii_px(
+            sigma,
+            optics.frame_width_mm(cam_data.sensor_fit, cam_data.sensor_width,
+                                  cam_data.sensor_height, aspect),
+            render.resolution_x * render.resolution_percentage / 100.0,
+            ck.squeeze, render.pixel_aspect_x / render.pixel_aspect_y)
+        sigma_x, sigma_y = (r / optics.BLUR_RADIUS_PER_SIGMA for r in radii)
+        pixels = f"{sigma_y:.2f} px"
+        if abs(sigma_x - sigma_y) > 0.005:
+            pixels = f"{sigma_x:.2f} x {sigma_y:.2f} px"
+        col.label(text=f"Blur sigma {sigma * 1000.0:.2f} µm = {pixels}")
+    except ValueError:
+        pass
 
 
 class VIEW3D_PT_cinekit(bpy.types.Panel):
@@ -110,6 +190,16 @@ class VIEW3D_PT_ck_camera(_ChildPanel, bpy.types.Panel):
             return
         self.layout.label(text=cam_obj.name, icon='OUTLINER_OB_CAMERA')
         _draw_physical(self.layout, context, cam_obj.data)
+
+
+class CK_UL_breathing_points(bpy.types.UIList):
+    """Measured focus breathing: focus distance and focal length."""
+
+    def draw_item(self, context, layout, data, item, icon, active_data,
+                  active_prop, index):
+        row = layout.row(align=True)
+        row.prop(item, "distance", text="", emboss=False)
+        row.prop(item, "focal", text="", emboss=False)
 
 
 class CK_UL_shots(bpy.types.UIList):
@@ -274,12 +364,20 @@ class VIEW3D_PT_ck_focus(_ChildPanel, bpy.types.Panel):
         box = layout.box()
         box.label(text="DOF Readout", icon='DRIVER_DISTANCE')
         col = box.column(align=True)
+        ck = cam.cinekit
+        if ck.enabled:
+            # The distance on the focus scale of the lens: from the sensor.
+            mark = rig.focus_mark_m(cam)
+            col.label(text=f"Focus mark:  {mark:.2f} m")
         col.label(text=f"Hyperfocal:  {h:.2f} m")
         col.label(text=f"Near limit:  {near:.2f} m")
         col.label(text="Far limit:   ∞" if math.isinf(far)
                   else f"Far limit:   {far:.2f} m")
         col.label(text="Total DOF:  ∞" if math.isinf(total)
                   else f"Total DOF:  {total:.2f} m")
+        if ck.enabled and ck.min_focus > 0.0 and mark < ck.min_focus - 1e-6:
+            box.label(text=f"The lens cannot focus closer than "
+                           f"{ck.min_focus:.2f} m", icon='ERROR')
 
 
 class VIEW3D_PT_ck_lighting(_ChildPanel, bpy.types.Panel):
@@ -429,6 +527,7 @@ class NODE_PT_cinekit_look(bpy.types.Panel):
 
 
 CLASSES = (
+    CK_UL_breathing_points,
     VIEW3D_PT_cinekit,
     VIEW3D_PT_ck_camera,
     CK_UL_shots,

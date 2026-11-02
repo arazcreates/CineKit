@@ -4,8 +4,10 @@
     python -m unittest discover tests    (from the extension root)
 """
 
+import itertools
 import math
 import os
+import re
 import sys
 import unittest
 
@@ -107,6 +109,231 @@ class TestExposure(unittest.TestCase):
     def test_illuminance_rejects_nonpositive(self):
         with self.assertRaises(ValueError):
             optics.ev100_for_illuminance(0.0)
+
+
+class TestLensExposure(unittest.TestCase):
+    def test_t_stop(self):
+        self.assertAlmostEqual(optics.t_stop(2.0, 1.0), 2.0)
+        self.assertAlmostEqual(optics.t_stop(1.4, 0.87), 1.4 / math.sqrt(0.87))
+
+    def test_transmission_costs_light(self):
+        base = optics.camera_ev100(2.8, 1 / 50, 100)
+        dim = optics.camera_ev100(2.8, 1 / 50, 100, transmission=0.81)
+        self.assertAlmostEqual(dim - base, -math.log2(0.81), places=9)
+
+    def test_nd_adds_stops(self):
+        base = optics.camera_ev100(2.8, 1 / 50, 100)
+        self.assertAlmostEqual(
+            optics.camera_ev100(2.8, 1 / 50, 100, nd_stops=3.0) - base, 3.0)
+
+    def test_rejects_bad_transmission(self):
+        with self.assertRaises(ValueError):
+            optics.t_stop(2.0, 0.0)
+
+
+class TestAperture(unittest.TestCase):
+    def test_stops_closed(self):
+        self.assertAlmostEqual(optics.stops_closed(2.8, 1.4), 2.0)
+        self.assertEqual(optics.stops_closed(1.0, 1.4), 0.0)
+
+    def test_round_wide_open(self):
+        blades, _ = optics.aperture_shape(1.4, 1.4, 9, round_stops=1.0)
+        self.assertEqual(blades, 0)
+        blades, _ = optics.aperture_shape(2.8, 1.4, 9, round_stops=1.0)
+        self.assertEqual(blades, 9)
+
+    def test_rotation_per_stop(self):
+        _, rotation = optics.aperture_shape(5.6, 1.4, 8, rotation_deg=10.0,
+                                            rotation_per_stop_deg=4.0)
+        self.assertAlmostEqual(rotation, 10.0 + 4.0 * 4.0)
+
+    def test_fewer_than_three_blades_is_round(self):
+        self.assertEqual(optics.aperture_shape(8.0, 1.4, 2)[0], 0)
+
+
+class TestLensSoftness(unittest.TestCase):
+    def test_airy_sigma(self):
+        # sigma = 0.42 * 550 nm * N
+        self.assertAlmostEqual(optics.diffraction_sigma_mm(8.0),
+                               0.42 * 550e-6 * 8.0)
+
+    def test_magnification_widens_diffraction(self):
+        m = optics.magnification(100.0, 0.3)      # f / (u - f) = 0.5
+        self.assertAlmostEqual(m, 0.5)
+        self.assertAlmostEqual(optics.diffraction_sigma_mm(8.0, m),
+                               1.5 * optics.diffraction_sigma_mm(8.0))
+
+    def test_aberration_falls_with_cube(self):
+        wide = optics.aberration_sigma_mm(1.4, 1.4, 8.0)
+        two_stops = optics.aberration_sigma_mm(2.8, 1.4, 8.0)
+        self.assertAlmostEqual(wide, 0.008)
+        self.assertAlmostEqual(two_stops, 0.008 / 8.0)
+
+    def test_sweet_spot(self):
+        # Wide open aberrations dominate, stopped far down diffraction does.
+        blur = [optics.lens_blur_sigma_mm(n, 1.4, 8.0, 50.0, 1000.0)
+                for n in (1.4, 2.8, 5.6, 11.0, 22.0)]
+        best = blur.index(min(blur))
+        self.assertIn(best, (1, 2, 3))
+        self.assertGreater(blur[0], blur[best])
+        self.assertGreater(blur[4], blur[best])
+
+    def test_mtf50_sigma(self):
+        self.assertAlmostEqual(optics.mtf50_to_sigma_um(40.0), 187.39 / 40.0,
+                               places=2)
+
+    def test_gaussian_mtf50_consistency(self):
+        sigma_mm = optics.mtf50_to_sigma_um(30.0) / 1000.0
+        mtf = math.exp(-2.0 * math.pi ** 2 * sigma_mm ** 2 * 30.0 ** 2)
+        self.assertAlmostEqual(mtf, 0.5, places=6)
+
+    def test_blur_radius_px(self):
+        # 4.5 um pixels: sigma 4.5 um is one pixel, radius 3 px.
+        self.assertAlmostEqual(optics.blur_radius_px(0.0045, 17.28, 3840),
+                               3.0, places=9)
+
+    def test_close_focus_stops_at_one_to_one(self):
+        # At or inside the focal length the magnification stays 1:1.
+        near = optics.lens_blur_sigma_mm(8.0, 1.4, 0.0, 50.0, 0.01)
+        self.assertAlmostEqual(near, optics.diffraction_sigma_mm(8.0, 1.0))
+        self.assertAlmostEqual(optics.lens_blur_sigma_mm(8.0, 1.4, 0.0, 50.0,
+                                                         0.1), near)
+
+    def test_frame_width_by_sensor_fit(self):
+        self.assertEqual(optics.frame_width_mm('AUTO', 36.0, 24.0, 16 / 9),
+                         36.0)
+        self.assertAlmostEqual(optics.frame_width_mm('AUTO', 36.0, 24.0, 0.5),
+                               18.0)
+        self.assertEqual(
+            optics.frame_width_mm('HORIZONTAL', 36.0, 24.0, 0.5), 36.0)
+        self.assertAlmostEqual(
+            optics.frame_width_mm('VERTICAL', 36.0, 24.0, 2.0), 48.0)
+
+    def test_radii_follow_squeeze_and_pixel_aspect(self):
+        wide, tall = optics.lens_blur_radii_px(0.0045, 17.28, 3840,
+                                               squeeze=2.0)
+        self.assertAlmostEqual(wide, 6.0)
+        self.assertAlmostEqual(tall, 3.0)
+        wide, tall = optics.lens_blur_radii_px(0.0045, 17.28, 3840,
+                                               pixel_aspect=2.0)
+        self.assertAlmostEqual(wide, 3.0)
+        self.assertAlmostEqual(tall, 6.0)
+        self.assertEqual(optics.lens_blur_radii_px(1.0, 1.0, 10000),
+                         (optics.MAX_BLUR_RADIUS_PX,) * 2)
+
+
+class TestBlurNode(unittest.TestCase):
+    # Radius: variance of one blurred pixel, rendered in Blender 5.2 with
+    # the Gaussian type.
+    MEASURED = {0.3: 0.0, 0.5: 0.0, 0.75: 0.0007, 1.0: 0.0217, 1.25: 0.1010,
+                1.5: 0.2150, 2.0: 0.4416, 3.0: 0.9959, 4.5: 2.2435,
+                6.0: 3.9513, 9.0: 8.8536}
+
+    def test_variance_matches_blender(self):
+        for radius, variance in self.MEASURED.items():
+            self.assertAlmostEqual(optics.blur_node_variance(radius), variance,
+                                   places=4, msg=radius)
+
+    def test_node_radius_gives_the_variance(self):
+        for sigma in (0.05, 0.2, 0.5, 1.0, 3.0, 20.0):
+            radius = optics.blur_node_radius(sigma)
+            self.assertAlmostEqual(optics.blur_node_variance(radius),
+                                   sigma * sigma, places=6)
+        self.assertEqual(optics.blur_node_radius(0.0), 0.0)
+
+    def test_small_sigma_needs_a_larger_radius(self):
+        self.assertGreater(optics.blur_node_radius(0.1), 3.0 * 0.1)
+        self.assertAlmostEqual(optics.blur_node_radius(2.0), 6.0, delta=0.05)
+
+    def test_curve_accuracy(self):
+        # Linear steps between the keys, and past the last key up to the
+        # radius limit.
+        steps = 2000
+        for step in range(steps + 1):
+            radius = 0.03 * (optics.MAX_BLUR_RADIUS_PX / 0.03) ** (step / steps)
+            node = optics.blur_curve_radius(radius)
+            sigma = math.sqrt(optics.blur_node_variance(node))
+            self.assertAlmostEqual(sigma / (radius / 3.0), 1.0, delta=0.008,
+                                   msg=f"radius {radius:.4f}")
+
+    def test_curve_starts_at_zero(self):
+        self.assertEqual(optics.blur_curve()[0], (0.0, 0.0))
+        self.assertEqual(len(optics.blur_curve()), len(optics.BLUR_CURVE_KEYS))
+
+    def test_curve_keys_survive_blender(self):
+        # FCurve.update() drops a key 0.01 or less after the previous key.
+        keys = optics.blur_curve()
+        for (x0, _y0), (x1, _y1) in zip(keys, keys[1:]):
+            self.assertGreater(x1 - x0, 0.5)
+
+
+class TestLensBlurDriver(unittest.TestCase):
+    FITS = ('AUTO', 'HORIZONTAL', 'VERTICAL')    # driver values 0, 1, 2
+
+    def test_fits_in_a_simple_expression(self):
+        allowed = {"sqrt", "pow", "min", "max"}
+        allowed |= {name for name, _ in optics.LENS_BLUR_VARIABLES}
+        for horizontal in (True, False):
+            expression = optics.lens_blur_driver(horizontal)
+            self.assertLessEqual(len(expression),
+                                 optics.DRIVER_EXPRESSION_LIMIT)
+            self.assertNotIn("**", expression)
+            self.assertLessEqual(set(re.findall(r"[A-Za-z_]\w*", expression)),
+                                 allowed)
+
+    def test_matches_the_python_math(self):
+        namespace = {"__builtins__": {}, "sqrt": math.sqrt, "pow": math.pow,
+                     "min": min, "max": max}
+        drivers = [compile(optics.lens_blur_driver(horizontal), "driver",
+                           "eval") for horizontal in (True, False)]
+        renders = ((1920, 1080, 100, 1.0, 1.0), (1080, 1920, 50, 1.0, 1.0),
+                   (1440, 1080, 100, 4.0, 3.0))
+        cases = itertools.product((0.95, 1.4, 5.6, 22.0), (0.0, 12.0), (0, 1),
+                                  (0.04, 0.3, 5.0), (0, 1, 2), renders,
+                                  (1.0, 2.0))
+        for n, s, d, u, t, (x, y, p, i, j), q in cases:
+            values = {"n": n, "a": 1.4, "s": s, "d": d, "f": 50.0, "u": u,
+                      "w": 36.0 * q, "h": 24.0, "t": t, "q": q, "x": x,
+                      "y": y, "p": p, "i": i, "j": j}
+            got = [eval(code, namespace, values) / optics.BLUR_DRIVER_SCALE
+                   for code in drivers]
+            sigma = optics.lens_blur_sigma_mm(n, 1.4, s, 50.0, u, bool(d))
+            frame = optics.frame_width_mm(self.FITS[t], 36.0 * q, 24.0,
+                                          x * i / (y * j))
+            want = optics.lens_blur_radii_px(sigma, frame, x * p / 100.0, q,
+                                             i / j)
+            for got_value, want_value in zip(got, want):
+                self.assertAlmostEqual(got_value, want_value, places=9,
+                                       msg=str(values))
+
+
+class TestBreathing(unittest.TestCase):
+    def test_unit_focus_thin_lens(self):
+        # A 50 mm lens at 0.3 m: v = f*u/(u-f) = 60 mm.
+        self.assertAlmostEqual(optics.unit_focus_focal(50.0, 0.3), 60.0)
+
+    def test_infinity_has_no_breathing(self):
+        self.assertAlmostEqual(optics.unit_focus_focal(50.0, 1e9), 50.0)
+
+    def test_amount_scales_and_can_widen(self):
+        self.assertAlmostEqual(optics.unit_focus_focal(50.0, 0.3, 0.5), 55.0)
+        self.assertLess(optics.unit_focus_focal(50.0, 0.3, -0.5), 50.0)
+
+    def test_stylized_model_unchanged(self):
+        self.assertAlmostEqual(optics.stylized_breathing_focal(50.0, 1.0, 0.1),
+                               50.0 * (1.0 + 0.1 * 0.05))
+
+
+class TestRollingShutter(unittest.TestCase):
+    def test_cycles_values(self):
+        shutter, duration = optics.rolling_shutter(0.02, 0.02, 24.0)
+        self.assertAlmostEqual(shutter, 0.96)
+        self.assertAlmostEqual(duration, 0.5)
+
+    def test_global_shutter(self):
+        shutter, duration = optics.rolling_shutter(1 / 48, 0.0, 24.0)
+        self.assertAlmostEqual(shutter, 0.5)
+        self.assertAlmostEqual(duration, 1.0)
 
 
 class TestTransfer(unittest.TestCase):
